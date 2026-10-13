@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "tags": [
+    {
+      "id": "design",
+      "label": "策划原型",
+      "icon": "策",
+      "color": "#98784b"
+    },
+    {
+      "id": "development",
+      "label": "编程工具",
+      "icon": "码",
+      "color": "#397da0"
+    },
+    {
+      "id": "assets",
+      "label": "美术音频",
+      "icon": "绘",
+      "color": "#976aa5"
+    },
+    {
+      "id": "content",
+      "label": "关卡叙事",
+      "icon": "关",
+      "color": "#64834b"
+    },
+    {
+      "id": "gameplay",
+      "label": "NPC 与玩法",
+      "icon": "玩",
+      "color": "#b36a56"
+    },
+    {
+      "id": "testing",
+      "label": "测试数值",
+      "icon": "测",
+      "color": "#728149"
+    },
+    {
+      "id": "performance",
+      "label": "性能渲染",
+      "icon": "帧",
+      "color": "#0d7f8a"
+    },
+    {
+      "id": "operations",
+      "label": "运营体验",
+      "icon": "营",
+      "color": "#6a79a5"
+    },
+    {
+      "id": "frontier",
+      "label": "前沿研究",
+      "icon": "新",
+      "color": "#8266a0"
+    }
+  ],
+  "reports": [
+    {
+      "date": "2026-10-13",
+      "file": "2026-10-13.json",
+      "tags": [
+        "performance",
+        "development"
+      ],
+      "title": "用 AI 定位 Cocos / Web 游戏卡顿：从性能记录到最小修改",
+      "summary": "给 AI 一份可复现的问题包，让它提出有证据、可验证的优化建议。用一次敌人生成卡顿和一个合批检查，练习如何测量、修改与复测。"
+    }
+  ]
+}
