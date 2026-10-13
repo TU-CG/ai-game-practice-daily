@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="每天一个 AI 游戏应用主题：开发技巧、玩法创新和前沿观察，附实践步骤与可靠来源。">
+  <title>AI 游戏应用实战日报</title>
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#list-panel">跳到文章列表</a>
+  <aside class="rail" aria-label="文章分类">
+    <div class="rail-brand">分类</div>
+    <nav class="rail-nav" id="category-filters" aria-label="AI 游戏应用分类"></nav>
+  </aside>
+
+  <div class="app">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">AI × GAME · DAILY PRACTICE</p>
+        <div>
+          <h1>把 AI 的能力<br>用进游戏里</h1>
+          <p class="hero-lede">每天一个应用主题，从开发提效到玩法创新，结合 Cocos 与 Web，把想法做成可以验证的小实验。</p>
+        </div>
+      </div>
+      <div class="hero-note">读懂一个场景，试做一个原型。<br>有方法、有示例，也有适用边界。</div>
+    </header>
+
+    <main class="content">
+      <section class="panel list-panel" id="list-panel">
+        <div class="panel-head">
+          <div class="panel-head-main">
+            <h2>文章列表</h2>
+            <p class="collapsed-title" id="collapsed-title"></p>
+          </div>
+          <div class="list-tools">
+            <label class="search-box">
+              <span class="search-icon" aria-hidden="true">⌕</span>
+              <input class="search-input" id="search-input" type="search" placeholder="搜索标题、摘要或分类" aria-label="搜索文章">
+            </label>
+            <span class="report-count" id="report-count" aria-live="polite"></span>
+            <button class="list-toggle" id="list-toggle" type="button">继续阅读 ↑</button>
+          </div>
+        </div>
+
+        <div class="report-list" id="report-list" aria-live="polite"></div>
+
+        <div class="pagination" id="pagination" aria-label="文章列表分页">
+          <button class="page-button" id="prev-page" type="button" aria-label="上一页" title="上一页">‹</button>
+          <span class="page-indicator">第 <input class="page-input" id="page-input" type="number" min="1" value="1" aria-label="跳转到页码"> / <span id="total-pages">1</span> 页</span>
+          <button class="page-button" id="next-page" type="button" aria-label="下一页" title="下一页">›</button>
+        </div>
+      </section>
+
+      <article class="reader" id="article-content" hidden></article>
+    </main>
+  </div>
+</body>
+</html>
