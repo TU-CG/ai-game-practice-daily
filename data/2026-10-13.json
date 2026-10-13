@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-13",
+  "tags": [
+    "performance",
+    "development"
+  ],
+  "title": "用 AI 定位 Cocos / Web 游戏卡顿：从性能记录到最小修改",
+  "summary": "给 AI 一份可复现的问题包，让它提出有证据、可验证的优化建议。用一次敌人生成卡顿和一个合批检查，练习如何测量、修改与复测。",
+  "readingMinutes": 7,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8.x / 浏览器 Web 构建；小游戏端需使用平台对应的性能工具。示例尚未在你的项目中实跑。",
+  "sections": [
+    {
+      "heading": "今天要解决什么",
+      "body": "假设你在做一个割草小游戏：平时运行流畅，一次生成大量敌人时明显卡顿。AI 可以协助解读性能记录、缩小排查范围、提出修改；是否有效，仍由同一设备上的对照测试判断。\n\n本期从 AI 辅助性能分析切入。后续日报会轮换代码、美术、关卡、NPC、自动试玩、运营与前沿研究，每次讲透一个实际场景。"
+    },
+    {
+      "heading": "先准备一份可复现的问题包",
+      "body": "| 提供什么 | 示例 |\n| --- | --- |\n| 运行环境 | Cocos 具体版本、Web 构建、手机型号、浏览器版本、构建模式 |\n| 复现操作 | 进入第三波，一次生成 100 个敌人 |\n| 性能证据 | 卡顿区间的性能记录、热点函数、内存变化 |\n| 相关代码 | 敌人生成、初始化、回收以及对应的 update() |\n\n在 Chrome DevTools 的 Performance 面板录制这段操作，选中卡顿区间，再查看 Bottom-up。Self Time 表示函数自身耗时，Total Time 包含子调用。结合调用栈，把时间开销对应到具体业务代码。[Chrome 官方说明](https://developer.chrome.com/docs/devtools/performance/reference)\n\n保持场景、设备、分辨率和操作一致；首次运行与预热后的运行分开记录，避免把初次加载开销误当作持续性能问题。"
+    },
+    {
+      "heading": "可以直接复制的 AI 分析提示词",
+      "body": "```text\n请分析这份 Cocos/Web 小游戏性能问题。\n\n环境：[引擎版本、设备、浏览器、构建模式]\n目标：[例如稳定 60 FPS]\n复现步骤：[操作]\n性能记录和相关代码：[附后]\n\n请依次输出：\n1. 数据中已经确认的现象。\n2. 最可能的三个原因，每个原因引用对应证据；\n   没有证据的部分标为假设。\n3. 最优先验证的一个原因，以及最小验证实验。\n4. 一个保持玩法行为不变的最小修改。\n5. 修改前后应比较哪些指标，以及可能的副作用。\n\n资料不足时明确缺少什么，不要预测未经测量的提升百分比。\n```\n\n拿到回答后，先检查它引用的证据是否确实存在，再实施修改。如果回答只有“用对象池”“减少 Draw Call”等泛化建议，就要求它说明哪条记录支持这个判断，以及什么结果能推翻判断。"
+    },
+    {
+      "heading": "Cocos 实例：验证合批被打断的假设",
+      "body": "当性能记录指向渲染提交开销，且场景有大量小图片时，可以让 AI 根据节点层级、材质和图集信息检查合批。\n\n合批会把满足条件的绘制对象合并提交。同一图集只是条件之一；材质、混合与深度模板状态、纹理采样和渲染顺序也会影响结果。Mask 等组件会形成合批边界。[Cocos 3.8 合批规则](https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/engine/ui-batch.html)\n\n```text\n简化示例：\n原渲染顺序：图集 A → 图集 B → 图集 A → 图集 B\n候选顺序：  图集 A → 图集 A → 图集 B → 图集 B\n```\n\n其他条件相同、且调整顺序不改变遮挡效果时，候选顺序可能减少批次。让 AI 标出可能打断合批的位置，再逐项验证；不能为了合批改变游戏画面的正确层次。\n\n动态合图也值得实验，但需要一起观察内存。Cocos 3.8 文档说明，它会增加内存占用，小游戏和原生平台默认关闭，强制启用还涉及初始化时机。[动态合图说明](https://docs.cocos.com/creator/3.8/manual/en/advanced-topics/dynamic-atlas.html)\n\n**同时检查 Draw Call、帧耗时与内存。** Draw Call 下降而卡顿没有改善，意味着主要瓶颈可能仍然存在。"
+    },
+    {
+      "heading": "给业务代码添加测量标记",
+      "body": "下列 TypeScript 示例用于浏览器环境。在原本生成敌人的位置包装同步调用，就能把测量区间对应到业务名称。\n\n```ts\nfunction measureSync<T>(name: string, run: () => T): T {\n  const start = performance.now();\n  try {\n    return run();\n  } finally {\n    performance.measure(name, {\n      start,\n      end: performance.now(),\n    });\n  }\n}\n\n// 在组件原本调用 spawnWave 的位置使用：\nmeasureSync(\"game/spawnWave\", () => this.spawnWave());\n```\n\nperformance.measure() 创建具名测量记录，可在 Chrome 的 Timings 轨道中查看。这段代码测量同步调用的经过时间，不代表 GPU 完成绘制的时间，也不会等待异步任务完成。仅在短时诊断期间使用，避免大量标记本身干扰结果；采集结束后用 performance.clearMeasures(\"game/spawnWave\") 清理记录。[MDN API 说明](https://developer.mozilla.org/en-US/docs/Web/API/Performance/measure)"
+    },
+    {
+      "heading": "延伸应用：AI 生成受约束的敌人波次",
+      "body": "下面是本期设计的小方案：开发阶段让 AI 输出波次 JSON，经过程序校验与试玩，再作为资源打进游戏。运行时读取已确认的配置，这部分玩法不需要等待模型响应，也不产生逐局模型调用费用；开发阶段使用模型仍可能有费用。\n\n```text\n为三分钟的割草小游戏生成六波敌人配置。\n敌人类型只有 normal、fast、tank。\n每波包含 enemyType、count、spawnInterval、restSeconds。\n\n前两波逐步教学，第三波引入 fast，第五波引入 tank。\n不修改敌人基础属性。先定义字段和合法范围，再输出 JSON。\n同时生成 TypeScript 校验函数，并列出需要试玩验证的难度假设。\n```\n\n每波生成数量不等于同屏存活数量。玩家清怪慢时，敌人会跨波累积。生成器应检查存活上限，达到上限就延迟生成。AI 生成的数值需要用击杀速度、受伤次数和通关率等实际数据验证。"
+    },
+    {
+      "heading": "25 分钟动手练习",
+      "body": "1. 5 分钟：选一个稳定复现的卡顿操作，在同一设备上录制基线。\n2. 5 分钟：把热点、代码和复现步骤交给 AI，要求给出一个可证伪的假设。\n3. 10 分钟：实施一项最小修改，例如复用已确认存在分配热点的临时对象。\n4. 5 分钟：保持场景和操作一致，修改前后各运行三次，记录结果。\n\n记录操作耗时、卡顿区间的帧表现、内存变化与玩法是否一致。今天的产出是一份有证据的瓶颈判断、一处修改和一张前后对比表。若无改善，保留结论并回退这项修改，继续检验下一个假设。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Chrome DevTools：Performance 功能参考",
+      "url": "https://developer.chrome.com/docs/devtools/performance/reference"
+    },
+    {
+      "title": "Cocos Creator 3.8：2D 渲染合批规则",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/engine/ui-batch.html"
+    },
+    {
+      "title": "Cocos Creator 3.8：Dynamic Atlas",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/advanced-topics/dynamic-atlas.html"
+    },
+    {
+      "title": "MDN：Performance.measure()",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Performance/measure"
+    }
+  ]
+}
