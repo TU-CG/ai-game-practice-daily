@@ -58,6 +58,17 @@
   ],
   "reports": [
     {
+      "date": "2026-10-18",
+      "tags": [
+        "testing",
+        "design",
+        "development"
+      ],
+      "title": "让 AI 写自动试玩策略：用同一批战斗检查药水数值",
+      "summary": "把“药水多回 6 点血会怎样”变成可复现的战斗对照：AI 协助写策略与边界样例，脚本负责结算和统计。附固定随机场景的 JavaScript、实跑结果、ML-Agents 工具案例与 25 分钟练习，适用于 Cocos / Web 的制作期数值验证。",
+      "file": "2026-10-18.json"
+    },
+    {
       "date": "2026-10-17",
       "tags": [
         "operations",

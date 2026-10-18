@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-18",
+  "tags": [
+    "testing",
+    "design",
+    "development"
+  ],
+  "title": "让 AI 写自动试玩策略：用同一批战斗检查药水数值",
+  "summary": "把“药水多回 6 点血会怎样”变成可复现的战斗对照：AI 协助写策略与边界样例，脚本负责结算和统计。附固定随机场景的 JavaScript、实跑结果、ML-Agents 工具案例与 25 分钟练习，适用于 Cocos / Web 的制作期数值验证。",
+  "readingMinutes": 8,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8.x / Web/H5、小游戏和移动游戏的制作期战斗测试；方法可迁移至 PC/主机项目。原生 JavaScript 在 Node.js 22.16.0 验证。来源于 2026-10-18 核验：Cocos 3.8 LTS、Unity ML-Agents 4.1.0、Stable-Baselines3 master 文档（页面版本 2.9.2a0）；未安装或训练后两者。",
+  "sections": [
+    {
+      "heading": "场景：药水增强了，但哪些打法真正受益？",
+      "body": "你在做一款小型回合制闯关游戏，准备把药水回复从 24 调到 30。手动打赢几次，不能说明改动稳定有效：也许这几局敌人刚好没暴击。今天先做一个没有画面的战斗切片，用同一批随机场景分别运行旧、新配置，再回放发生变化的局。\n\n以下规则、策略、代码和结果都是本期原创教学示例，不是某款商业游戏的数据。玩家 60 血、敌人 80 血，玩家先行动；只有攻击和喝药，每局一瓶药。攻击造成 14–18 的整数伤害，喝药占用一回合，生命上限 60；敌人还活着才反击，基础伤害 9–15，15% 概率翻倍。血量归零立即结束，最多 12 回合，未决单列 timeout。\n\n**生成式 AI 负责起草可审查的试玩策略、列出边界情况、解释具体回放；游戏规则和统计由确定性代码执行。** 本期的“只攻击”和“低血喝药”是传统规则策略，可改写成状态机或行为树，没有训练，不属于强化学习。自动跑很多局也不会自动变成机器学习。"
+    },
+    {
+      "heading": "让 AI 交付小策略，不让它改裁判",
+      "body": "先锁定战斗规则，再把策略限制为“读当前可见状态，返回一个合法动作”。不把未来随机结果、整条随机序列或配置写权限交给策略。下面提示词配合上节规则使用，先生成文字和函数草稿，人工审查后再加入自己的测试脚本。\n\n```text\n你是回合制游戏的自动试玩助手。以下战斗规则保持不变：[粘贴规则]。\n策略接口：policy({hp, foe, potions})，只返回 attack 或 heal。\n只能读这些当前可见字段，不能改状态、随机数、伤害公式或结算顺序。\n药水为 0 时不能 heal；不得联网、读文件、调用时间或使用 Math.random。\n请给出三个容易解释的策略：只攻击、低血喝药、优先斩杀。\n每个策略说明适用假设，并给出 3 个输入状态及预期动作。\n另列 5 个裁判的边界测试，包含刚好击杀、喝药后的反击和药水耗尽。\n不知道实跑结果时明确写待测，不估算胜率。\n若之后给你失败回放，只引用回合号和状态解释，不自行修改规则。\n```\n\n“优先斩杀”只能依据可知的最小伤害判断，例如敌人血量不超过 14 时攻击必杀；不能偷看本回合尚未发生的随机伤害。本期代码先保留两个基线策略，第三个留作练习。固定策略后再比较配置，不能一边换药水数值、一边修改喝药阈值。\n\n保存提示词、模型标识、人工修改与策略版本。不要把模型回复直接交给 eval；只把审查过的函数加入受控测试工程。策略返回非法动作就报错并保留该局，不能把失败样本悄悄删掉。"
+    },
+    {
+      "heading": "可运行切片：为每回合预先准备同一组随机结果",
+      "body": "只复用一个 seed 还不够：如果攻击才抽随机数、喝药不抽，不同策略会让后面的随机序列错位。下面先为每回合生成攻击和反击结果，再把相同 tape 交给两个配置；即使某项未使用，也不把后面的结果前移。策略只能看到当前状态，不能看到 tape。\n\n```js\n// 保存为 battle-probe.mjs，运行 node battle-probe.mjs。\nfunction makeTape(seed, turns = 12) {\n  let x = seed >>> 0;\n  const rand = () => {\n    x = (x + 0x6D2B79F5) >>> 0;\n    let t = Math.imul(x ^ (x >>> 15), x | 1);\n    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);\n    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;\n  };\n  return Array.from({ length: turns }, () => ({\n    hit: 14 + Math.floor(rand() * 5),\n    hurt: (9 + Math.floor(rand() * 7)) * (rand() < 0.15 ? 2 : 1)\n  }));\n}\nfunction fight(tape, heal, policy) {\n  let hp = 60, foe = 80, potions = 1;\n  const trace = [];\n  for (const [i, roll] of tape.entries()) {\n    const action = policy({ hp, foe, potions });\n    if (action === \"heal\" && potions > 0) {\n      hp = Math.min(60, hp + heal); potions--;\n    } else if (action === \"attack\") {\n      foe = Math.max(0, foe - roll.hit);\n    } else throw new Error(\"非法动作或药水耗尽\");\n    if (foe > 0) hp = Math.max(0, hp - roll.hurt);\n    trace.push({ turn: i + 1, action, hp, foe, potions });\n    if (foe === 0 || hp === 0) {\n      return { result: foe === 0 ? \"win\" : \"loss\", trace };\n    }\n  }\n  return { result: \"timeout\", trace };\n}\nconst policies = {\n  rush: () => \"attack\",\n  cautious: s => s.hp <= 30 && s.potions > 0 ? \"heal\" : \"attack\"\n};\nconst seeds = Array.from({ length: 400 }, (_, i) => i + 1001);\nfor (const [name, policy] of Object.entries(policies)) {\n  const rows = seeds.map(seed => {\n    const tape = makeTape(seed);\n    return { seed, a: fight(tape, 24, policy), b: fight(tape, 30, policy) };\n  });\n  console.log({ policy: name, n: rows.length,\n    aWins: rows.filter(r => r.a.result === \"win\").length,\n    bWins: rows.filter(r => r.b.result === \"win\").length,\n    improved: rows.filter(r => r.a.result !== \"win\" && r.b.result === \"win\").length,\n    regressed: rows.filter(r => r.a.result === \"win\" && r.b.result !== \"win\").length,\n    aTimeouts: rows.filter(r => r.a.result === \"timeout\").length,\n    bTimeouts: rows.filter(r => r.b.result === \"timeout\").length\n  });\n  const changed = rows.find(r => r.a.result !== r.b.result);\n  if (changed) console.log(\"first difference\", JSON.stringify(changed));\n}\n```\n\n这里的伪随机发生器只用于可复现教学模拟，不用于安全抽奖。1001–1400 是固定的演示种子集合；400 是练习规模，不是足够统计可信度的保证。每个策略分别跑 400 组 A/B，共 1600 场，A 回 24 血，B 回 30 血；函数每次重置生命和药水，且不修改 tape。\n\n接入自己的项目时，应从真实战斗模块抽出结算函数，共享同一套规则。正文为了可以独立复制，才内置一份小裁判；如果生产逻辑另写一份，必须对齐回合轨迹，防止测试通过的是另一个游戏。"
+    },
+    {
+      "heading": "本次实跑：先看配对变化，再看回放",
+      "body": "正文代码在 Node.js 22.16.0 实际运行得到下表。计数只适用于上述规则、策略与 400 个固定种子，没有模型自主学习，也没有真人样本。\n\n| 策略 | A 胜局 / 400 | B 胜局 / 400 | A 非胜 → B 胜 | A 胜 → B 非胜 | A / B 超时 |\n| --- | --- | --- | --- | --- | --- |\n| rush：一直攻击 | 193（48.25%） | 193（48.25%） | 0 | 0 | 0 / 0 |\n| cautious：血量不高于 30 时喝药 | 300（75%） | 342（85.5%） | 42 | 0 | 0 / 0 |\n\n只攻击的策略根本不使用药水，所以两配置的完整轨迹应一致；这是一个有用的对照。谨慎策略在这批样本中增加 42 胜，即 10.5 个百分点，不能改写成“玩家通关率提升 10.5%”。\n\n第一组结果改变的种子是 1005：第 3 回合结束，玩家 25 血、敌人 33 血。第 4 回合喝药并承受 28 点反击后，A 剩 21 血、B 剩 27 血。第 6 回合敌人剩 1 血，A 已阵亡，B 还剩 6 血；B 在第 7 回合击杀，敌人不再反击。这样的轨迹比一句“药水有效”更能指导检查。\n\n本次还用人工可算的固定序列检查：刚好击杀不反击、喝药后照常受击、满血回复封顶、空药水与未知动作报错、死亡后不继续行动、达到上限返回 timeout，并检查输入序列不被修改及相同种子可复现。它们验证小裁判的关键边界，不证明 Cocos 中的动画、碰撞或真实玩家体验已通过。"
+    },
+    {
+      "heading": "验收口径：会赢的机器人，不等于会玩的玩家",
+      "body": "把调策略用的种子与最终验收种子分开。1001–1400 的结果已经在本文公开，适合复现；如果据此调参，这批就属于开发数据，应另外留一批未看过的种子。还要覆盖不同初始血量、敌人类型与道具条件；换种子只改变随机事件，不能补齐缺失机制。\n\n[Stable-Baselines3 的评估指南](https://stable-baselines3.readthedocs.io/en/master/guide/rl_tips.html) 强调独立评估环境、多次运行，以及奖励或回合长度包装对比较的影响；这里借用的是评估原则，没有运行 SB3 或把规则脚本称作 RL。其 master 页面当前标为 2.9.2a0，本文不把它当稳定版安装建议。\n\n| 要回答的问题 | 应记录的证据 | 本期边界 |\n| --- | --- | --- |\n| 改动影响谁 | 每种策略的胜 / 负 / 超时及配对转变 | 不只报混合平均胜率 |\n| 是否出现退步 | 同一种子从胜变非胜的回放 | 本批为零不代表所有情况为零 |\n| 会不会拖长战斗 | 胜局回合分布和超时比例 | 不把失败局与胜局耗时混成一个数 |\n| 策略是否作弊 | 观察字段、动作合法性与状态变化 | 禁止读取未来随机结果 |\n| AI 是否省制作时间 | 写策略加审查、修复的总时间 | 没有测量就不报告提效比例 |\n\n正式数值决策需增加独立批次与真人试玩，按玩家可见信息、操作延迟和犯错行为构建不同策略。机器人有完美反应或只覆盖两种打法时，胜率不能代表新手难度。短样本里零超时、零退步，都只是“尚未发现”。"
+    },
+    {
+      "heading": "Cocos / Web 接入：逻辑回合与画面播放分开",
+      "body": "本期的部署位置是开发机或测试流水线：先批量模拟，再把异常种子和动作轨迹送回游戏回放。Cocos 3.8 的 update(deltaTime) 属于组件逐帧生命周期，[官方说明](https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html) 展示了用它更新对象状态；本方案的逻辑回合由明确动作推进，不把一次 update 当成一回合。\n\n1. 把血量、道具、回合号与配置放在不依赖 Node 的逻辑模块中，界面只显示结算结果。\n2. 测试端连续调用规则；回放端按动作日志逐步调用相同规则，动画结束再播放下一条，核对每回合状态。\n3. 真人按钮与测试策略共用合法动作入口，避免机器人绕过冷却、道具检查或服务器权限。\n4. 保存规则版本、配置、策略版本、种子与动作日志。规则版本变化后重新模拟；旧轨迹只作历史记录。\n\n小游戏与移动端在测试构建中回放少量失败局；PC/主机项目也可迁移相同协议。实时物理、网络同步和跨平台浮点行为不在这个整数回合模型内，不能仅靠固定 seed 宣称全引擎确定性。\n\n| 环节 | 延迟、费用与负载处理 |\n| --- | --- |\n| AI 起草 | 制作期调用已有云端或本机模型；记录实际耗时、用量和人工审查时间，小批量修改 |\n| 模拟与缓存 | 端侧纯脚本批跑；按规则 / 配置 / 策略 / 种子版本保存结果，变化后重算 |\n| 游戏运行 | 无逐回合模型请求或推理费；仍需测结算与回放的 CPU、内存及帧耗时 |\n| 失败与降级 | 模型不可用时用已审查基线；模拟非法动作标为测试失败，不修改正式配置 |\n\n不要在玩家主线程一次执行大型批测。若将来改成运行时云模型或端侧神经策略，需要另测响应 P95、包体、内存和并发，并设动作超时与本地回退；本期没有这样的运行时 AI，也没有宣称批测速度。"
+    },
+    {
+      "heading": "相关公开工具：ML-Agents，把“写策略”扩展为“训练策略”",
+      "body": "[Unity ML-Agents 4.1.0 官方总览](https://docs.unity3d.com/Packages/com.unity.ml-agents@4.1/manual/index.html) 把自动测试游戏构建、评估设计列为用途。它支持将游戏作为学习环境，由代理接收观察、执行动作并获得奖励；训练算法在配套 Python 包中，Unity C# 包负责场景接入与训练后模型的使用。这是现有公开工具案例，不是今日发布新闻，也不是 Cocos 插件。\n\n对本期战斗，一个后续实验是把同一裁判包装成“重置—观察—动作—结果”接口，再训练策略搜索容易获胜的打法。只给当前血量、敌人血量和药水数量；奖励以胜负为主，单独记录超时。若为了奖励不断喝药或拖回合，需要先查目标和规则是否允许钻空子，不能直接解释为玩家偏好。以上是本期提出的实验方向，未进行训练或复现。\n\n状态机和行为树仍可作为基线及动作执行层；强化学习替换的是从经验学习策略的部分。Cocos 项目可迁移环境接口、留出评估与失败回放方法，具体训练通信和推理集成需要另做。先证明脚本基线覆盖不足，再评估训练时间、硬件成本与维护收益。"
+    },
+    {
+      "heading": "25 分钟练习：交付一个可解释的数值差异",
+      "body": "1. 5 分钟：复制脚本运行，确认两个策略的 A/B 胜局和 seed=1005 的回放；把规则表与代码逐项对照。\n2. 6 分钟：用提示词起草“优先斩杀”策略。审查它只读当前状态，并用敌人 14 血、药水为零等样例检查；无模型入口时手写，注明来源。\n3. 6 分钟：保持药水配置不变，比较新策略与基线；随后冻结策略，仅改变一个配置。两类实验分别保存，避免混淆原因。\n4. 5 分钟：选一组变化或失败种子，按回合纸面回放，或放进已有 Cocos 原型；没有现成工程时，把引擎内回放列为待办。\n5. 3 分钟：记录胜 / 负 / 超时、成对变化、一个边界反例和仍缺少的真人证据。下一轮准备未用于调参的新场景。\n\n完成物是一份规则、两个冻结策略、一张 A/B 结果表及一条可解释回放。今天先判断“这项改动在什么策略和场景下改变结局”，是否更有趣、是否适合上线，留给后续真实试玩与测量。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Cocos Creator 3.8 LTS：Life Cycle Callbacks（2026-10-18 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html"
+    },
+    {
+      "title": "Stable-Baselines3：Reinforcement Learning Tips and Tricks（master / 2.9.2a0，2026-10-18 核验）",
+      "url": "https://stable-baselines3.readthedocs.io/en/master/guide/rl_tips.html"
+    },
+    {
+      "title": "Unity ML-Agents 4.1.0：官方总览与自动测试用途（2026-10-18 核验）",
+      "url": "https://docs.unity3d.com/Packages/com.unity.ml-agents@4.1/manual/index.html"
+    }
+  ]
+}
