@@ -1,0 +1,64 @@
+{
+  "date": "2026-10-21",
+  "tags": [
+    "assets",
+    "testing"
+  ],
+  "title": "把 AI 地表纹理铺进游戏：先查接缝，再看重复感",
+  "summary": "围绕俯视角草地，建立从 AI 候选到可用平铺纹理的验收流程。附生成提示词、实跑边缘检查、Firefly 工具案例、Cocos 两种平铺方式与 25 分钟练习，避免把“边缘相同”误当成“画面自然”。",
+  "readingMinutes": 8,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8.x / Web/H5、小游戏与移动游戏的制作期地表美术；流程可迁移至 PC/主机。2026-10-21 核验 Cocos 3.8 文档、Firefly 网页帮助（图像生成页更新于 2026-07-09）及 FAQ；工具示例固定为 Firefly Image 4，不宣称最新。代码在 Node.js 22.16.0 验证；未生成真实纹理或进行引擎、真机测试。",
+  "sections": [
+    {
+      "heading": "场景：一张好看的草地，铺满屏幕后成了棋盘",
+      "body": "一款俯视角生存小游戏需要低干扰的草地。AI 候选单张看很漂亮，铺成九宫格后却出现一圈亮边，中央那块白石头也每隔半屏重复一次。前者是接缝，后者是可辨认的重复图案；修掉一个，不保证另一个也消失。\n\n**今天的目标是一张能进入游戏验收的静态颜色纹理。** 图像生成模型负责草叶、色调和细节候选；平铺、边缘计算、图像偏移和地图摆放都是常规图形处理或程序化方法，不是强化学习。状态机、行为树仍负责角色行为，不参与判断草地是否自然。\n\n以下草地规格、提示词、脚本和数字样本均为原创教学示例。Firefly 是相关公开工具案例；本期没有调用生成服务，没有可报告的模型成功率。这是一套长期制作方法，亦不把普通彩色图片当作已校准的 PBR 材质或法线贴图。"
+    },
+    {
+      "heading": "先约定游戏里的用途，再给模型提示词",
+      "body": "先把最终交付规格写成：512×512、完全不透明、俯视、绿色为主、没有固定方向的强阴影；在目标镜头下，敌人轮廓与掉落物应清楚。512 是练习尺寸，不是所有项目的最佳分辨率；导出时核对真实像素和 Alpha，不靠提示词保证。\n\n```text\n为俯视角 2D 生存游戏生成一张草地颜色纹理候选。\n正交俯视，只包含密度均匀的细小草叶和少量泥土。\n低对比、低饱和的自然绿色，柔和均匀照明，完全覆盖画面。\n希望上下、左右可重复拼接；没有边框、暗角、渐变照明或中心焦点。\n不要路径、大石块、花朵、物品、文字、标志、透视或投射阴影。\n画面为正方形，不透明；最终将导出为 512×512。\n保持细节尺度一致，便于在角色脚下铺成大面积背景。\n```\n\n在现有入口取 2–4 个候选，固定模型、画幅和风格，一次只改一个问题，例如“减少大块亮斑”。“可重复拼接”表达意图，不是边界条件的数学保证。保存原始文件、实际模型名、提示词、设置和导出版本；随机种子若工具没有提供，就写未提供，不承诺能精确重现。"
+    },
+    {
+      "heading": "公开工具案例：用 Firefly 起草，先核实采用条件",
+      "body": "[Firefly 图像生成帮助](https://helpx.adobe.com/firefly/web/work-with-images/generate-images/generate-images-from-text-descriptions.html) 描述了选择模型、画幅、内容类型，以及用构图或风格参考引导候选的流程。本文示例固定选 Adobe Firefly Image 4；界面可选模型和设置会变化，记录实际选择比只写“Firefly 生成”更有用。该文档不构成本期纹理已经无缝的证据。\n\n[Firefly FAQ](https://helpx.adobe.com/firefly/web/get-started/learn-the-basics/adobe-firefly-faq.html) 说明：非 beta 功能生成结果可用于商业项目；beta 输出也可商用，除非产品内另有明确限制。采用时核对实际功能、模型、账号条款及产品提示，并保存日期记录。不要将这项说明自动套到界面里的合作方模型；参考图也应有相应使用权。本练习可只用文字输入，不借用其他游戏截图。\n\n允许商用不等于独占权或每个结果都完成了权利审查。入选前仍检查是否出现文字、商标或明显借用的图案。本期只核验官方使用说明，未下载、发布或采用任何生成素材，也不要求新购工具。"
+    },
+    {
+      "heading": "制作步骤：九宫格看重复，环绕偏移找接缝",
+      "body": "1. 用已有图像编辑器把候选无间距铺成 3×3，分别按原像素和游戏实际显示比例看。先标亮边、色带、断掉的草叶，再找按固定间隔出现的大斑块；同时放入角色与掉落物作对照。\n2. 对 512×512 候选做水平、垂直各 256 像素的环绕偏移，将越界像素卷回。原来的四边会相遇在画面中央，便于修补；普通平移留下空白不等价。\n3. 只修中央接缝附近，保留新画面的外圈。手工克隆、绘制或局部生成都可作为候选修订方式；局部生成仍需验收，整张重生可能再次破坏边界。保留原稿，修后再做 3×3。\n4. 最终缩放、格式转换和压缩后重新检查。若低分辨率导出使细节成噪点，降低细节密度或改用其他候选，不只继续锐化。\n\n两边像素完全相等既不是充分条件，也不是所有自然平铺图的必要条件：跨边界是相邻像素，不是同一个采样点。方向、粗细、亮度变化要接得自然；把两条边硬复制成一样，可能只造出一圈重复线。下面的数字检查用于定位可疑候选，最终仍看拼接画面。"
+    },
+    {
+      "heading": "短脚本：测边缘差，也保留“零分却不好看”的反例",
+      "body": "下列函数比较左右边界和上下边界的对应像素，先平均 RGB 三通道绝对差，再报告该边的均值与最大值，范围 0–255。最大值帮助发现均值掩盖的局部异常；这些是编码后字节差，不是人眼感知距离，没有通用合格阈值。\n\n```js\n// 保存为 tile-edge.mjs，运行 node tile-edge.mjs。\n// 只接受不透明、8 位 RGBA；数值是 RGB 字节差，不是感知评分。\nexport function edgeStats({ width: w, height: h, data }) {\n  if (!Number.isSafeInteger(w) || !Number.isSafeInteger(h) || w < 2 || h < 2 ||\n      !(data instanceof Uint8Array || data instanceof Uint8ClampedArray) ||\n      data.length !== w * h * 4) throw new Error(\"需要至少 2×2 的 RGBA 字节数组\");\n  for (let i = 3; i < data.length; i += 4) {\n    if (data[i] !== 255) throw new Error(\"本例只检查不透明纹理\");\n  }\n  const delta = (x1, y1, x2, y2) => {\n    const a = (y1 * w + x1) * 4, b = (y2 * w + x2) * 4;\n    return (Math.abs(data[a] - data[b]) +\n      Math.abs(data[a + 1] - data[b + 1]) +\n      Math.abs(data[a + 2] - data[b + 2])) / 3;\n  };\n  const summarize = (n, sample) => {\n    let sum = 0, max = 0;\n    for (let i = 0; i < n; i++) {\n      const d = sample(i); sum += d; max = Math.max(max, d);\n    }\n    return { mean: sum / n, max };\n  };\n  const x = summarize(h, y => delta(0, y, w - 1, y));\n  const y = summarize(w, x => delta(x, 0, x, h - 1));\n  return { meanX: x.mean, maxX: x.max, meanY: y.mean, maxY: y.max };\n}\nexport function gray(fn, width = 4, height = 4) {\n  const data = new Uint8ClampedArray(width * height * 4);\n  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {\n    const v = fn(x, y); data.set([v, v, v, 255], (y * width + x) * 4);\n  }\n  return { width, height, data };\n}\nconst samples = {\n  gradient: gray(x => x * 85),\n  centerPatch: gray((x, y) => x > 0 && x < 3 && y > 0 && y < 3 ? 255 : 0),\n  periodic: gray(x => [64, 128, 192, 128][x])\n};\nconsole.table(Object.entries(samples).map(([name, pixels]) =>\n  ({ name, ...edgeStats(pixels) })));\n```\n\n把真实图片按原尺寸解码后，可把浏览器 Canvas 的 8 位 RGBA ImageData 传给 edgeStats；本段只包含像素检查和自造样本，不含文件选择、解码或编辑器插件。透明素材会被拒绝，应另做合成背景与 Alpha 边缘检查。\n\n正文代码原样提取，在 Node.js 22.16.0 运行得到：\n\n| 手工构造的 4×4 样本 | meanX / maxX | meanY / maxY | 应如何解读 |\n| --- | --- | --- | --- |\n| gradient：每行 0、85、170、255 | 255 / 255 | 0 / 0 | 横向重复会从亮跳回暗 |\n| centerPatch：黑边包住中央白块 | 0 / 0 | 0 / 0 | 边缘相同，中央白块仍会周期性出现 |\n| periodic：每行 64、128、192、128 | 64 / 64 | 0 / 0 | 跨边变化 64，与行内相邻变化一样，不能仅因非零拒绝 |\n\n另验证了纯色、非正方形、单处边缘异常、彩色通道、错误长度和透明输入。只凭数值无法评价草叶是否自然、角色是否好认或压缩后是否闪烁；本次结果仅验证检查器，不代表 AI 纹理质量。"
+    },
+    {
+      "heading": "放进 Cocos：区分 Sprite 平铺与纹理寻址",
+      "body": "2D 原型先把不透明图片设为 SpriteFrame，挂到 Sprite，Type 选择 Tiled，再把节点显示尺寸扩为原图三倍。[Cocos 3.8 Sprite 文档](https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/sprite.html) 说明 Tiled 随尺寸重复原图；它适合快速观察整片背景。核对实际重复次数与比例，不把拉伸后的单张图当作验收。\n\n若使用地面网格或自定义材质，让 UV 超出 0–1，才需要配套的纹理 Repeat 寻址。按 [Cocos 3.8 Texture 文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/texture.html)，在 Texture2D 子资源选择 Wrap Mode；WebGL 1 的非二次幂纹理存在 Repeat 限制。练习用 512×512；不要据此声称所有 WebGL 2 纹理也受同样限制。\n\nSprite 的 Tiled 与采样器 Repeat 是两种机制，不能互相替代。自定义 Repeat 首版使用独立纹理；整张图集重复不等于某个子图重复。SpriteFrame 导入还可能把寻址设为 Clamp，应检查实际配置。\n\n在目标构建中移动和缩放镜头，检查细线、闪烁与过滤。需要缩小采样时比较 mipmap 配置，并记录内存；512×512 RGBA8 基础像素量为 1 MiB，完整 mip 链约增三分之一，这是格式算量，不是设备实测。小游戏、移动端与 PC/主机都应重测其压缩、镜头和资源预算。"
+    },
+    {
+      "heading": "验收和成本：按入选资产计算，不按生成张数计算",
+      "body": "| 检查项 | 留下的证据 |\n| --- | --- |\n| 接缝 | 同一比例的 3×3 预览；左右、上下边缘均值与最大值；修补位置 |\n| 重复与玩法可读性 | 标记固定重复亮斑；角色和掉落物叠在背景上的检查记录 |\n| 目标平台 | 构建后纹理格式、尺寸、加载耗时、内存和镜头移动录像 |\n| 制作投入 | 全部候选数、入选数、生成等待、额度费用、人工修补与返工时间 |\n\n同尺寸、同格式、同显示比例比较候选；压缩前通过，不能替代构建后检查。不要用全部涂成纯色取得零边缘差后，宣布美术质量提升。正式采用时以已有人工制作流程为对照，统计每张批准资产的总投入，未测量就不写省时百分比。\n\n本方案的 AI 在制作期云端或开发机运行，少量串行生成并限制返工；服务不可用就使用已批准的旧纹理。缓存保留模型与提示词版本、原稿、导出参数和文件哈希，便于追踪哪张真正入包。运行时端侧只加载静态纹理，没有逐帧推理等待或模型调用费；仍有下载、解码和 GPU 负载。加载失败用随包备用纹理，不能让关卡等待生成。"
+    },
+    {
+      "heading": "25 分钟练习：交付一张有采用理由的地表候选",
+      "body": "1. 4 分钟：定下俯视草地规格，准备原背景及角色作对照，写清图片用途与来源。\n2. 6 分钟：在已有模型入口生成 2–4 个候选并保留真实记录；等待超预算就用自有图片练流程，注明未完成 AI 生成。\n3. 6 分钟：做 3×3 预览和半幅环绕偏移，只修最明显的一处；保存修前修后结果。\n4. 6 分钟：运行脚本理解三个反例，再把一张候选放入已有 Cocos/Web 场景看平铺与角色可读性；没有工程时将引擎和真机验收明确列为待办。\n5. 3 分钟：记录入选或退回原因、实际耗时、来源与商用条件核对记录。\n\n完成物是原稿、导出稿、一张平铺检查图和一份采用结论。今天先解决一种地面；后续增加地貌变体时，再验证不同纹理之间的过渡，单张自平铺通过不保证草地能自然接上沙地。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Adobe Firefly：Generate images from text descriptions（2026-07-09 文档；示例 Image 4，2026-10-21 核验）",
+      "url": "https://helpx.adobe.com/firefly/web/work-with-images/generate-images/generate-images-from-text-descriptions.html"
+    },
+    {
+      "title": "Adobe Firefly FAQ：Using Firefly / 商业项目使用条件（网页文档；2026-10-21 核验）",
+      "url": "https://helpx.adobe.com/firefly/web/get-started/learn-the-basics/adobe-firefly-faq.html"
+    },
+    {
+      "title": "Cocos Creator 3.8：纹理贴图资源，过滤、mipmap 与寻址模式（2026-10-21 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/texture.html"
+    },
+    {
+      "title": "Cocos Creator 3.8：Sprite Component Usage Example / Tiled 模式（2026-10-21 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/sprite.html"
+    }
+  ]
+}
