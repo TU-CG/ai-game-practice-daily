@@ -1,0 +1,60 @@
+{
+  "date": "2026-10-22",
+  "tags": [
+    "development",
+    "testing"
+  ],
+  "title": "让 AI 写 Cocos 面板：用反复开关揪出重复订阅",
+  "summary": "背包第一次打开正常，第三次打开却刷新三遍？用明确的生命周期约束让 AI 起草组件，再检查函数身份、关闭后的响应和其他订阅者。附 Cocos 示例、可运行反例、Aider 测试工作流与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8.x / Web/H5、小游戏与移动游戏的制作期编程；订阅所有权与验收方法可迁移至 PC/主机。2026-10-22 核验 Cocos 3.8 文档及 Aider 滚动文档；不宣称工具的新版本发布。Node.js 22.16.0 运行函数身份实验，组件以测试替身检查；未启动 Cocos 编辑器或进行真机性能测量。",
+  "sections": [
+    {
+      "heading": "场景：背包关了，事件监听却没走",
+      "body": "一款竖屏收集游戏里，背包面板来自可复用节点。玩家打开、关闭三次，再拾取一个物品，刷新日志却连出三行。常见原因之一是每次打开都注册新匿名函数，关闭时又创建另一个匿名函数去解绑；外观相同的两段代码，没有指向同一个函数对象。\n\n今天让生成式语言模型协助写这一个组件、解释补丁和提出异常用例。事件分发、函数比较与测试断言是常规程序逻辑；“打开 / 关闭”是界面状态，不是强化学习策略。只有工具实际执行编辑、测试并把失败反馈给模型时，才形成编程智能体的工具循环。\n\n**目标是每次有效事件只刷新一次，关闭后刷新零次。** 这不证明背包数据、奖励结算或 UI 排版都正确。下文场景、提示词与实验是原创教学示例；错误候选是刻意构造的反例，未把它归因于任何外部模型。Aider 是公开工具案例，本期介绍长期方法。"
+    },
+    {
+      "heading": "给 AI 一份小而明确的组件合同",
+      "body": "先提供引擎的完整版本号、相关组件、事件发布位置，以及面板究竟是改 active、改 enabled，还是仅调透明度隐藏。三者不能混写：如果只把 UI 变透明，组件可能仍处于启用状态。\n\n| 合同项目 | 本期约定 |\n| --- | --- |\n| 事件来源 | 共享的 Cocos EventTarget，事件名 inventory-changed |\n| 谁拥有订阅 | 每个 BagPanel 实例只管理自己的回调 |\n| 有效期间 | 组件在层级中启用时监听，禁用时解除 |\n| 回调职责 | 读取现有背包模型刷新显示，不改物品数量 |\n| 不可破坏的行为 | 独立 HUD 订阅同一事件，背包关闭不能影响它 |\n\n可复制下面的提示词，并附实际组件与发布代码。让模型先对照需求再改一个文件，避免为了测试通过顺手重写事件系统。\n\n```text\n环境：Cocos Creator 3.8.x、TypeScript、Web 构建。\n任务：修复复用背包面板的 inventory-changed 事件订阅。\n面板以 node.active 切换显示；事件来自共享 EventTarget。\n只修改 BagPanel 的监听与解绑；不要修改背包数据或事件发布方。\n使用同一个回调函数引用和同一个 target 配对 on/off。\n不要用 off(eventName) 清除其他实例的监听；不要每次 bind 生成新函数。\n不要把每次启用都要恢复的监听只放进 start。\n验收：打开时每次事件刷新一次；关闭时零次；连续三轮仍成立；\n两个面板实例互不干扰，另一个 HUD 的监听持续有效。\n先指出已知事实与缺失上下文，再给最小补丁和复现步骤。\n不修改预先确定的预期计数，不宣称运行过未执行的测试。\n相关组件及发布代码：[粘贴经过筛选的代码]\n```\n\n若现有代码还有编辑器事件绑定、另一个自动订阅入口或继承类的监听，要一并交代。模型看到一个局部文件，不代表已经排除了其他重复来源。"
+    },
+    {
+      "heading": "Cocos 最小实现：订阅与可见生命周期配对",
+      "body": "[Cocos 3.8 生命周期文档](https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html) 区分首次初始化与启用、禁用回调。对本期可复用面板，把监听配对放在 onEnable / onDisable；游戏中通过节点或组件状态触发生命周期，不手动调用这些回调。\n\n```ts\n// BagPanel.ts：挂到随面板一起启用、禁用的节点。\nimport { _decorator, Component, EventTarget } from 'cc';\nconst { ccclass } = _decorator;\nexport const inventoryEvents = new EventTarget();\nexport const INVENTORY_CHANGED = 'inventory-changed';\n\n@ccclass('BagPanel')\nexport class BagPanel extends Component {\n  public debugEventRefreshes = 0;\n\n  protected onEnable(): void {\n    inventoryEvents.on(INVENTORY_CHANGED, this.onChanged, this);\n  }\n\n  protected onDisable(): void {\n    inventoryEvents.off(INVENTORY_CHANGED, this.onChanged, this);\n  }\n\n  private onChanged(): void {\n    this.debugEventRefreshes++;\n    // 在这里读取背包数据并刷新 UI；本例只计数。\n    console.log('event refresh', this.debugEventRefreshes);\n  }\n}\n```\n\n在其他脚本导入同一个 inventoryEvents 与 INVENTORY_CHANGED，在背包数据真正改变后执行 inventoryEvents.emit(INVENTORY_CHANGED)。不要在发布方再 new 一个总线；两个独立对象不会互通。为了短例子，总线与组件在一个文件里；现有项目应复用自己的事件服务。\n\n这里只展示事件计数，没有完整背包 UI。实际打开面板时，还应从当前背包快照主动刷新一次，补上关闭期间的数据变化；把这次初始化刷新与事件刷新分开统计。事件通知不是历史记录，重新订阅不会自动补发遗漏消息。\n\n[Cocos 事件文档](https://docs.cocos.com/creator/3.8/manual/en/engine/event/event-emit.html) 要求 on/off 的参数对应。这里用实例方法引用与 this 保持配对；若确实需要包装函数，就在实例上保存一次，并用保存的引用解绑。once 会在第一次响应后解除，不适合持续更新的背包。"
+    },
+    {
+      "heading": "可运行反例：代码看起来一样，函数却不是同一个",
+      "body": "下面用原生 Set 模拟“保存 / 删除函数引用”，把故障拆到不需要引擎的大小。每轮执行打开、发事件、关闭、再发事件，共三轮；独立监听者应一直收到全部六次事件。\n\n```js\n// 保存为 listener-check.mjs，运行 node listener-check.mjs。\nimport assert from 'node:assert/strict';\n\nfunction replay(freshWrapper) {\n  // 这是函数身份实验，不是 Cocos EventTarget 的实现。\n  const listeners = new Set();\n  let count = 0, other = 0, opened = 0, closed = 0;\n  const render = () => count++;\n  const independent = () => other++;\n  listeners.add(independent);\n  const emit = () => [...listeners].forEach(fn => fn());\n  for (let i = 0; i < 3; i++) {\n    listeners.add(freshWrapper ? () => render() : render);\n    let before = count;\n    emit();\n    opened += count - before;\n    listeners.delete(freshWrapper ? () => render() : render);\n    before = count;\n    emit();\n    closed += count - before;\n  }\n  return { opened, closed, other, remaining: listeners.size - 1 };\n}\nconst fixed = replay(false), broken = replay(true);\nassert.deepEqual(fixed, { opened: 3, closed: 0, other: 6, remaining: 0 });\nassert.deepEqual(broken, { opened: 6, closed: 6, other: 6, remaining: 3 });\nconsole.table({ fixed, broken });\n```\n\n正文脚本在 Node.js 22.16.0 实跑得到：\n\n| 版本 | 打开期间累计刷新 | 关闭期间累计刷新 | 独立监听者响应 | 残留面板回调 |\n| --- | --- | --- | --- | --- |\n| fixed：同一引用 | 3 | 0 | 6 | 0 |\n| broken：每次新建包装函数 | 6 | 6 | 6 | 3 |\n\nbroken 的打开期是 1+2+3，关闭期也一样，因为解绑没有删除先前存入的函数。将“无论什么事件都不刷新”作为修复，会同时破坏打开期计数；将集合全部清空，则会破坏独立监听者计数。\n\n这个实验只证明函数身份问题，不复刻 Cocos 的去重、目标对象、节点层级或销毁时序。不要由此概括成“任何重复 on 都必然增加监听”；是否为同一回调、同一 target，以及事件系统规则都要检查。"
+    },
+    {
+      "heading": "验收三层：脚本过了，还要在真实场景中开关",
+      "body": "1. 先审补丁：确认事件对象、事件名、回调和 target 配对；没有清空共享总线，没有修改物品数量。给候选编号，保留修改前后的差异。\n2. 再跑独立检查：本文将组件代码原样提取后，用只实现相关接口的 cc 测试替身编译和执行，检查三轮开关、持续事件、两个面板实例及独立监听者；这不等于真实引擎编译或运行。\n3. 最后在已有 Cocos 场景里切换 node.active、组件 enabled、父节点 active，再做对象复用与切换场景。销毁后的检查等引擎处理完该帧再进行，不把同步脚本实验当作销毁时序的证明。\n\n| 场景中的验收序列 | 观察目标 |\n| --- | --- |\n| 连续三轮打开→事件→关闭→事件 | 面板事件计数累计 3，关闭期增量 0 |\n| 保持打开，连续发两次事件 | 增量 2，防止误用 once |\n| A、B 都打开；关闭 A；再发事件 | A 不增加，B 增加 1 |\n| 背包关闭，HUD 继续监听 | HUD 仍按每次事件增加 1 |\n| 关闭期间数据变化，再打开 | 快照显示最新数据，不依赖补发事件 |\n\n本次另做了两个故意破坏的组件版本：解绑换成新包装函数时，关闭期检查失败；改为清除整类事件时，其他订阅者检查失败。它们用于证明检查能抓住目标故障，不是实际项目缺陷统计。真正的场景和设备验收仍待读者完成。"
+    },
+    {
+      "heading": "相关公开工具：Aider 把测试失败带回编辑循环",
+      "body": "[Aider 的 Linting and testing 文档](https://aider.chat/docs/usage/lint-test.html) 介绍了 /test 命令，以及 --test-cmd 配合 --auto-test 在编辑后运行测试。测试需在失败时输出信息并返回非零退出码，工具才能据此继续尝试修复。\n\n已经使用 Aider 时，可在保存上面的脚本后执行 /test node listener-check.mjs，先确认命令与失败反馈能跑通。但这个独立实验没有导入 BagPanel，不能据此验收模型对组件的修改；随后应把项目里真正加载候选组件的测试命令接上。\n\n同样的流程可用现有 IDE 助手配合终端完成：先锁定预期计数，生成小补丁，运行检查，把失败序列交回模型，最多修订一轮后人工检查。检查器与候选一起被模型随意改写，会让“通过”失去意义；审核 diff 时也要看断言有没有被删改。\n\n本期核验的是 2026-10-22 的滚动文档，不绑定或宣称最新稳定版本；采用时记录实际 Aider 与模型版本。本次没有安装或运行 Aider，也没有测量它的修复成功率。"
+    },
+    {
+      "heading": "适用性与成本：按可接受补丁计算收益",
+      "body": "这套方法适合小游戏与移动游戏里反复出现的背包、任务、商店界面，也适合 PC/主机的菜单与对象复用。普通 Web 项目迁移的是“谁订阅、何时有效、谁负责解除”的约定；DOM 事件与第三方总线的 API 不一定接受 Cocos 的 target 参数，应按实际接口改写。\n\n本期 AI 只在制作期参与，可选云端模型或开发机模型。模型生成等待、上下文用量与修订次数计入开发成本；只给相关组件、事件合同和失败轨迹，保存模型名、提示词、基线版本和补丁。重用结果前核对代码版本；工具不可用时沿用人工审阅和本地测试。\n\n运行时端侧执行已审核的 TypeScript 逻辑，没有模型推理延迟或逐次调用费，也不需要运行时模型缓存、并发队列。仍应关注一次事件触发的实际刷新工作量。不要仅凭监听计数正确就宣布帧耗时或内存下降；若目标是性能，使用同一构建与设备分别测量刷新次数、耗时和内存。\n\n开发效率记录首轮通过与否、模型等待、人工审查、失败修订和最终总耗时，再与相同任务的人工基线比较。一次示例不能估计整体模型成功率；无测量就不写节省百分比。本例无外部美术音频资产，项目原有依赖和采用的外部代码仍沿用各自许可。"
+    },
+    {
+      "heading": "25 分钟练习：交付一个能解释的组件补丁",
+      "body": "1. 4 分钟：找一个已有可复用面板，标出显示方式、事件来源与订阅所有者；保存原代码和预期计数。\n2. 6 分钟：把合同与相关代码交给已有模型入口，审查它的最小补丁。没有模型入口时手改，注明本次没有模型输出。\n3. 5 分钟：运行函数身份实验，再用自己项目的检查或已有测试替身加载真实候选；主动尝试错误解绑，确认失败能被发现。\n4. 7 分钟：在已有 Cocos/Web 场景回放三轮开关与双实例，检查 HUD 和重新打开后的数据。没有工程时完成实验与补丁评审，把引擎验收列为待办。\n5. 3 分钟：记录通过项、未测项、修改差异与总耗时，移除临时日志后再纳入项目。\n\n完成物是一份小补丁、一条可回放的失败序列和一张验收表。下一步可以沿同一思路检查计时器、资源加载回调和异步请求，但每种资源都应先确定自己的取消语义，不把事件解绑直接当成万能清理函数。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Cocos Creator 3.8：Life Cycle Callbacks（onEnable / onDisable；2026-10-22 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html"
+    },
+    {
+      "title": "Cocos Creator 3.8：Event Listening and Emitting（EventTarget、on/off；2026-10-22 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/engine/event/event-emit.html"
+    },
+    {
+      "title": "Aider：Linting and testing（滚动文档，非版本发布消息；2026-10-22 核验）",
+      "url": "https://aider.chat/docs/usage/lint-test.html"
+    }
+  ]
+}
