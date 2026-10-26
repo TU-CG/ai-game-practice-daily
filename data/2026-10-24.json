@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-24",
+  "tags": [
+    "gameplay",
+    "development",
+    "performance"
+  ],
+  "title": "让 AI 看懂手势：把握拳识别变成一次可靠的施法",
+  "summary": "张掌准备、握拳施法，为什么识别正确仍会连发？用端侧视觉模型加时间门控，把逐帧分类变成可验收的游戏输入。附 MediaPipe 案例、可运行代码、Cocos/Web 接入与性能预算，以及 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 实验方案",
+  "scope": "Cocos Creator 3.8.x 的 Web/H5 体感原型；小游戏和移动原生端需另验摄像头、WASM 与线程能力，PC/主机可迁移输入协议与验收方法。2026-10-24 核验 MediaPipe Tasks Vision 滚动官方文档及 2022 年手势分类模型卡；不绑定或宣称最新 npm 版本。规则代码在 Node.js 22.16.0 验证；未下载模型、调用摄像头或测量真实设备。",
+  "sections": [
+    {
+      "heading": "场景：握住拳头，为什么连续发出了五个火球？",
+      "body": "你在做一个站立体验的魔法小游戏：玩家张开手掌准备，握拳发出一枚火球。视觉模型对连续五帧都给出“握拳”，恰好可能识别得很稳定；如果每帧都调用施法，游戏反而连发五次。**分类回答“现在是什么姿势”，输入系统还要回答“这是不是一次新动作”。**\n\n本期原创方案把链路拆成摄像头帧、端侧机器学习分类、时间门控、施法规则四层。模型负责从画面识别姿势；门控是普通状态机，判断准备、保持与再次准备；游戏代码检查冷却、资源和角色状态。它不是生成式模型，也没有通过奖励训练策略，不属于强化学习。NPC 的行为树若要响应火球，接收规则层事件即可。\n\n以下场景、提示词、门控代码和识别轨迹均为原创教学示例；MediaPipe 是公开工具案例。手工轨迹不代表某个模型的真实输出，本文也不宣称已经完成一款摄像头游戏。"
+    },
+    {
+      "heading": "公开工具案例：MediaPipe 能识别姿势，动作协议由游戏定义",
+      "body": "[MediaPipe 手势任务总览](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer) 给出手部关键点和手势类别；预置类别包含 Open_Palm、Closed_Fist。检测到手但无法归类时可返回 None，没有检测到手时结果为空。应把这两种情况与有效手势区分，不能拿上一帧的握拳继续补结果。\n\n[2022 年手势分类模型卡](https://storage.googleapis.com/mediapipe-assets/gesture_recognizer/model_card_hand_gesture_classification_with_faireness_2022.pdf) 描述的是基于手部关键点的姿势分类，不是挥手等动态动作识别，也不适用于双手组合或手语翻译。模型卡还说明低端手机、弱光、运动模糊等真实手机条件缺少充分验证；采用时需要自己的设备与人群样本。\n\n因此“张掌后握拳”是我们在分类结果之上定义的时间协议，不能宣传成模型理解了施法意图。首版只允许一名玩家、一只手，画面内出现另一只手就提示重新准备；左右手类别不能充当稳定的玩家身份。\n\n本期引用长期工具能力与模型边界，非今日新品消息。Web 指南页面更新于 2026-08-17，总览更新于 2026-10-01；安装时记录实际 npm 版本、WASM 文件版本和模型文件哈希，不把文档日期当软件版本。"
+    },
+    {
+      "heading": "先规定一次动作，再接相机",
+      "body": "先用按钮让火球正常发射，再写出下面这份输入合同。所有数值都是原型起点，应通过后面的误触与延迟测试调整。\n\n| 输入证据 | 本例处理 |\n| --- | --- |\n| 张掌分数至少 0.8，连续样本跨越至少 200ms | 进入已准备 |\n| 随后握拳达到同样条件 | 发出一次施法意图，退出已准备 |\n| 握拳一直保持 | 不再发出意图；必须重新稳定张掌 |\n| 低分、无手、None 或其他类别 | 清除准备和本段稳定计时 |\n| 相邻有效时间戳间隔超过 150ms | 清除准备，从当前样本重新计时 |\n| 重复或倒序时间戳 | 忽略，不能累计稳定时间 |\n\n连续指的是每个收到的样本均满足条件且间隔不超限，不代表摄像头间隙内的真实姿势必然未变。分数阈值也不是“正确概率至少 80%”的保证。这里没有偷偷调模型的手检测阈值；门控检查的是手势类别得分，两者不能混为一谈。\n\n可以用现有编程助手审阅协议与反例，提示词如下：\n\n```text\n请审阅“张掌准备、握拳施法”的单手输入协议与附带代码。\n只能检查门控，不修改模型类别、施法费用或技能冷却。\n按表给出：输入轨迹、预期施法次数、可能误触/漏触的原因。\n必须覆盖一直握拳、握拳中途低分、无手、长间隔、重复时间戳、\n倒序结果、暂停后恢复，以及同一帧按钮与手势都请求施法。\n分清代码可验收的条件与必须录制真人手势才能验证的条件。\n没有实际执行就标“预测”，不要声称模型或真机已经通过。\n```\n\n保留模型回复作为审阅草稿，预期次数由游戏设计者确认；不要让助手为“全通过”而同步放宽合同。"
+    },
+    {
+      "heading": "可运行门控：让保持成为保持，让动作只发生一次",
+      "body": "下面保存为 gesture-gate.mjs，用 node gesture-gate.mjs 运行。t 是采集帧时的单调时间，单位毫秒；摄像头适配层先取单手的最高得分类别，无手时传空字符串和 0。代码不包含模型推理、摄像头或技能冷却。\n\n```js\n/**\n * @Author liliwei\n * @Date 2026-10-24\n * @LastEditors liliwei\n * @LastEditTime 2026-10-24\n * @description 原创教学示例：将单手识别样本转为一次施法意图。\n */\n/** @typedef {{t:number, label:string, score:number}} GestureSample */\n\n/**\n * 创建独立门控器；200ms 稳定期、150ms 最大样本间隔仅为练习参数。\n * @returns {(sample: GestureSample) => boolean} 本次是否发出施法意图。\n */\nexport function createGestureGate() {\n  let last = -Infinity, current = '', since = 0, armed = false;\n  /**\n   * 接受按采集时间排序的样本；重复与倒序样本忽略。\n   * @param {GestureSample} sample t 为同一单调时钟下的毫秒值。\n   * @returns {boolean} true 只表示输入意图，扣费与冷却由游戏判断。\n   */\n  return function accept({ t, label, score }) {\n    if (!Number.isFinite(t) || t < 0 || typeof label !== 'string' ||\n        !Number.isFinite(score) || score < 0 || score > 1)\n      throw new Error('Invalid gesture sample');\n    if (t <= last) return false;\n    if (t - last > 150) { armed = false; current = ''; }\n    last = t;\n    const valid = score >= 0.8 &&\n      (label === 'Open_Palm' || label === 'Closed_Fist');\n    if (!valid) { armed = false; current = ''; return false; }\n    if (label !== current) { current = label; since = t; }\n    if (label === 'Open_Palm' && t - since >= 200) armed = true;\n    if (label === 'Closed_Fist' && armed && t - since >= 200) {\n      armed = false;\n      return true;\n    }\n    return false;\n  };\n}\n\nconst gate = createGestureGate();\nconst trace = [\n  [0, 'Open_Palm'], [100, 'Open_Palm'], [200, 'Open_Palm'],\n  [300, 'Closed_Fist'], [400, 'Closed_Fist'], [500, 'Closed_Fist'],\n  [600, 'Closed_Fist'], [700, 'Closed_Fist']\n];\nconst casts = trace.filter(([t, label]) => gate({ t, label, score: 0.9 }));\nconsole.log(casts.map(([t]) => t)); // [500]，单位 ms\n```\n\n正文代码原样提取后，在 Node.js 22.16.0 实跑：八个样本只在 t=500 发出一次意图；握拳五个样本若逐帧直接施法会发出五次。张掌在 t=200 完成准备，握拳从 t=300 到 500 达到稳定期；这 200ms 是规则主动加入的等待，不是设备推理延迟。\n\n| 人工构造的轨迹 | 门控发出次数 |\n| --- | --- |\n| 正文张掌后握拳并保持 | 1 |\n| 再接张掌 800/900/1000，握拳 1100/1200/1300 | 2，分别在 500 和 1300 |\n| 从开始就一直握拳 | 0 |\n| 准备后，握拳中途出现低分或无手，未重新张掌 | 0 |\n| 准备后采样中断超过 150ms，再直接握拳 | 0 |\n\n另检查了分数恰好 0.8、稳定时间恰好 200ms、间隔恰好 150ms、重复和倒序样本、非法分数及时间。检查证明状态机按这份合同工作，不证明模型识别率或玩家体验。低分立即取消准备比较保守，可能增加漏触；若以后增加容错，应保留故障轨迹重新比较。"
+    },
+    {
+      "heading": "接入 Cocos/Web：所有输入共用一个施法入口",
+      "body": "以下是本期提出的整合步骤，不是已经发布的 Cocos 插件：\n\n1. 在已有场景中放置“施法”按钮与状态文字。按 [Cocos Creator 3.8 Button 文档](https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/button.html) 用 ClickEvents 连接处理函数；手势通过后也调用同一个 tryCast 业务入口。\n2. tryCast 读取当前角色、冷却和资源，先完成一次原子规则结算，再播放效果。按钮灰显只用于反馈，函数入口仍需检查；同一帧同时收到按钮与手势时，以共享冷却和动作编号挡住重复扣费。\n3. 识别适配层与场景分开，每个输入会话拥有一个门控器。收到结果时核对会话编号与采集时间；旧场景、暂停前或超出项目时效预算的结果丢弃并清空准备。不能仅靠时间戳递增，把刚到达的旧结果当作当前意图。\n4. 暂停、切场景、关闭相机时销毁门控状态并释放摄像头流；恢复后要求重新张掌。显示“准备中 / 已准备 / 请重新张掌”，让玩家知道为何没有施法。\n5. 始终保留按钮、键盘或手柄入口。拒绝相机权限、模型加载失败、持续过慢时切回普通输入，不反复弹授权提示。\n\nWeb/H5 可先在 HTTPS 页面或本机开发环境实验。小游戏容器不等于完整浏览器，必须单独核验摄像头、WASM、Worker 和文件加载能力；移动原生与 PC/主机则需要各自的平台接入。可迁移的是输入合同、事件去重与测试轨迹，不能直接保证同一网页 SDK 在所有平台可用。"
+    },
+    {
+      "heading": "运行时预算：模型在端侧，也会占用帧时间",
+      "body": "[MediaPipe Web 指南](https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer/web_js) 指出 recognize 与 recognizeForVideo 同步执行，会阻塞调用线程，并建议用 Web Worker 把推理移出界面线程。直接给同步调用加 await，并不能让计算自动离开主线程。\n\n本原型选择端侧推理：相机画面在设备上处理，模型与运行库预先加载。采用时仍应检查实际网络请求，确认项目没有另行上传图像；本文没有部署或抓包验证这条链路。\n\n| 项目 | 可执行的预算办法 |\n| --- | --- |\n| 延迟 | 分开记录采集、推理开始/结束、门控触发、游戏接收与首个可见反馈；同时报告中位数、P95 和超时 |\n| 负载 | 首轮只处理一只手，试以 10–15 次/秒取样；最多一帧在途，忙时丢旧帧，避免排队越积越迟 |\n| 帧率 | 用相同场景比较关闭/开启识别；记录帧耗时分布、长帧、内存和持续运行温升；Worker 仍可能与渲染争用资源 |\n| 费用 | 本例不调用按次收费的云推理 API；模型分发流量、开发调试、设备算力与电量仍有成本 |\n| 缓存 | 按包版本与模型哈希缓存资源；不要把上一帧的类别缓存成新的动作，加载失败也不执行旧意图 |\n| 降级 | 超时或错误达到项目阈值，清空准备并切回普通输入；可先降低取样频率，但须同步检查最大间隔合同 |\n\n10–15 次/秒是待测起点，不是性能结论；若实际间隔经常超过 150ms，本例会经常取消准备，应先定位瓶颈，再评估是否调整合同。60 FPS 的一帧约 16.7ms 只是算术预算，不能推断模型能塞进去。\n\n握拳稳定期至少 200ms，整体体验还叠加采样等待、推理和显示。不要把官方某台设备的平均推理时间当成你的 H5 端到端延迟。本次未运行模型或真机，没有帧率、识别效果和费用测量值。\n\n本练习只用原创文字与数字轨迹，不引入外部美术、音频或玩家录像。Google 页面标注示例代码采用 Apache 2.0；这不自动证明所有模型权重与其他资产的分发条件相同。本文未下载或分发模型；商业构建采用具体模型包前，另核实其随附许可与所用素材授权。"
+    },
+    {
+      "heading": "验收按一次动作计数，别只看逐帧准确率",
+      "body": "先录一小组有明确意图的手势片段，人工标记每次“想施法”的动作及完成时刻，再统计游戏事件。按玩家、光照和设备分组，调阈值的片段与最终检查的片段分开。\n\n| 指标 | 口径 |\n| --- | --- |\n| 动作命中 | 预先固定匹配窗口内收到一次有效施法的目标动作数 / 全部目标动作数；同一事件只匹配一次 |\n| 重复触发 | 一次目标动作多出的施法次数；握拳长时间保持单独检查 |\n| 空闲误触 | 无施法意图时的触发次数 / 空闲分钟数，不能被大量正确空帧稀释 |\n| 交互延迟 | 人工标注动作完成到首个可见反馈的时间；漏触另计，不能从统计中消失 |\n| 可用性 | 相机拒绝、遮挡、离开画面、暂停恢复后能否清楚地回到普通输入 |\n\n对照组使用同一个施法按钮，观察是否真的更有表现力，是否容易疲劳，以及是否难以边持手机边做手势。体感适合部分站立或大屏场景，不应因为模型能识别，就取代所有小游戏的触控操作。小样本用来找故障，不能据此宣称商业留存改善。"
+    },
+    {
+      "heading": "25 分钟练习：先做能解释的输入，再接模型",
+      "body": "1. 4 分钟：写下单手合同与普通按钮的施法条件，明确一次动作只扣一次资源。\n2. 6 分钟：运行正文代码，确认输出 [500]；加上第二次张掌/握拳，再注入低分、无手和长间隔，记录输出。\n3. 5 分钟：用提示词审阅一条失败轨迹，人工核对预期。没有模型入口时自行评审并注明；不把手工轨迹称为识别结果。\n4. 7 分钟：在已有 Cocos/Web 工程把轨迹喂给门控，按钮与手势共用 tryCast，检查暂停恢复和双输入。已有相机原型才接入真实模型；没有时把模型与设备验收明确列为待办。\n5. 3 分钟：保存代码、规则参数、一次正确触发、一次被挡住的重复触发，以及未测项。下一步先补真实弱光与长时间保持的样本，再决定是否扩大玩法。\n\n完成物是一条可回放输入链路。门控通过后，仍需分别证明模型在目标场景可用、运行负载可接受，以及玩家愿意使用这种操作。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Google AI Edge：Gesture recognition guide for Web（页面 2026-08-17 更新；2026-10-24 核验，滚动 Tasks Vision 文档）",
+      "url": "https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer/web_js"
+    },
+    {
+      "title": "Google AI Edge：Gesture recognition task guide（页面 2026-10-01 更新；预置类别与任务输出，2026-10-24 核验）",
+      "url": "https://developers.google.com/edge/mediapipe/solutions/vision/gesture_recognizer"
+    },
+    {
+      "title": "Google MediaPipe：Hand Gesture Classification 模型卡（2022 文档；姿势分类适用边界与限制，2026-10-24 核验）",
+      "url": "https://storage.googleapis.com/mediapipe-assets/gesture_recognizer/model_card_hand_gesture_classification_with_faireness_2022.pdf"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Button Component Reference（ClickEvents / Interactable；2026-10-24 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/button.html"
+    }
+  ]
+}

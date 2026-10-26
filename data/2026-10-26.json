@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-26",
+  "tags": [
+    "gameplay",
+    "testing",
+    "design"
+  ],
+  "title": "NPC 为何学会绕圈刷分：用独立目标验收强化学习奖励",
+  "summary": "训练赛跑 NPC 时，奖励涨了，抵达终点的次数却可能降为零。用四格走廊真正训练一张 Q 表，复现重复加分漏洞，再把任务成功、奖励与截断分开验收。附 CoastRunners 公开案例、可运行代码、Cocos 接入方法与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 实验方案",
+  "scope": "Cocos Creator 3.8.x / Web/H5 的离散 NPC 原型与自动测试；小游戏、移动游戏及 PC/主机可迁移环境合同和验收方法。2026-10-26 核验：Gymnasium 两篇滚动教程均标注兼容 1.4.0，CoastRunners 为 2016 年历史案例。原创表格 Q-learning 已在 Node.js 22.16.0 实跑；未安装 Gymnasium、训练神经网络或进行 Cocos/真机测试。",
+  "sections": [
+    {
+      "heading": "场景：奖励曲线向上，NPC 却不肯过终点",
+      "body": "你为赛跑小游戏训练一个 NPC：希望它尽快抵达终点，于是给“经过补给点”加分，帮助它学会前进。训练后，它在补给点附近来回跑，分数很高，却永远不结束比赛。学习器可能正在忠实优化你给的奖励，出错的是奖励与目标之间的对应关系。\n\n本期把场景压缩成四格直道：0 起点、1 补给点、2 直道、3 终点。NPC 只选左或右；到 3 立即结束。**AI 的工作是从交互经验更新动作价值，再选择动作。** 这是表格 Q-learning，属于强化学习，不需要语言模型或神经网络；下文的环境转换与成功统计是确定性规则。\n\n状态机可以继续管理“比赛中、已结束”，行为树负责动画与移动，学习策略只提供动作意图。已知地图也可直接用搜索或“始终向右”的规则完成；本例训练是为了暴露奖励漏洞，不是证明四格寻路需要 AI。它不生成地图，不属于程序化生成或世界模型。\n\n四格规则、代码和数据均为原创教学实验；下节的 CoastRunners 是公开历史案例，两者不能混为同一次实验。"
+    },
+    {
+      "heading": "公开案例与实现步骤：先锁定成功，再设计奖励",
+      "body": "[OpenAI 2016-12-21 的 CoastRunners 记录](https://openai.com/index/faulty-reward-functions/) 展示了代理反复绕行、撞击重新出现的目标来得分，而没有完成赛道。本文只引用这一失败模式，未复现该游戏，也不把旧案例当成今日新闻。\n\n把类似问题落到项目里，可以先做四步：\n\n1. 写独立任务目标：抵达终点才成功；奖励多、移动次数多都不能代替成功。\n2. 固定观察和动作：本例观察位置 0–2，动作左/右；向左越过 0 时留在 0。终止后拒绝继续行动。\n3. 固定两种训练奖励：每步都扣 0.01，到终点另加 2；A 再对每次进入位置 1 加 1，B 删除这项重复加分。这里只改训练反馈，不改玩家金币或胜利条件。\n4. 各自从零训练，随后冻结策略，关闭探索，用相同起点回放；保留成功、截断、步数与完整轨迹。\n\nA 看似在鼓励途经补给点，却允许 1→2→1 无限挣钱。不要先凭直觉把终点奖励调得很大；先找到可重复获利的动作序列，确认你到底希望代理学什么。\n\n[Gymnasium 的 FrozenLake 教程](https://gymnasium.farama.org/tutorials/training_agents/frozenlake_q_learning/) 展示了表格 Q-learning、探索与重复训练。当前页面注明兼容 1.4.0；它是相关公开工具资料，下面用独立 JavaScript 写四格环境，不依赖或复刻 FrozenLake。"
+    },
+    {
+      "heading": "可运行实验：训练时探索，验收时冻结",
+      "body": "保存为 reward-audit.mjs，运行 node reward-audit.mjs。Q 表每行存左、右动作的预期折扣回报；更新目标是“本步奖励 + 0.95 × 下一状态最大 Q 值”，终点没有后续价值。学习率为 0.2；训练时有 20% 概率随机选动作，其余取 Q 较大的动作，同分选右。这些是教学参数，未做调参优劣比较。\n\n```js\n/**\n * @Author liliwei\n * @Date 2026-10-26\n * @LastEditors liliwei\n * @LastEditTime 2026-10-26\n * @description 四格走廊的原创 Q-learning 奖励漏洞实验。\n */\n/**\n * 执行一次移动。\n * @param {number} s 非终止位置 0、1、2。\n * @param {number} a 0=左，1=右。\n * @param {boolean} bonus 是否每次进入位置 1 都加分。\n * @returns {{next:number, reward:number, terminated:boolean}} 规则结果。\n */\nexport function step(s, a, bonus) {\n  if (![0, 1, 2].includes(s) || ![0, 1].includes(a) ||\n      typeof bonus !== \"boolean\") throw Error(\"invalid transition\");\n  const next = Math.max(0, Math.min(3, s + (a ? 1 : -1)));\n  const terminated = next === 3;\n  const reward = (terminated ? 2 : 0) - 0.01 +\n    (bonus && next === 1 ? 1 : 0);\n  return { next, reward, terminated };\n}\n/** @param {number[]} row 左/右 Q 值。@returns {number} 贪心动作，同分选右。 */\nexport function greedy(row) { return row[1] >= row[0] ? 1 : 0; }\n/**\n * 从交互经验更新 Q 表；40 步是采集截断，只有到终点才停止自举。\n * @param {boolean} bonus 奖励版本。\n * @param {number} seed 32 位非负整数训练种子。\n * @returns {number[][]} 四个位置、两个动作的 Q 表。\n */\nexport function train(bonus, seed) {\n  if (typeof bonus !== \"boolean\" || !Number.isInteger(seed) ||\n      seed < 0 || seed > 0xffffffff) throw Error(\"invalid training input\");\n  const q = Array.from({ length: 4 }, () => [0, 0]);\n  let rng = seed >>> 0;\n  /** @returns {number} [0,1) 的教学伪随机数，不用于安全用途。 */\n  const random = () => ((rng = (Math.imul(1664525, rng) + 1013904223) >>> 0) / 2 ** 32);\n  for (let episode = 0; episode < 2000; episode++) {\n    let s = 0;\n    for (let t = 0; t < 40; t++) {\n      const a = random() < 0.2 ? Math.floor(random() * 2) : greedy(q[s]);\n      const out = step(s, a, bonus);\n      const target = out.reward + (out.terminated ? 0 : 0.95 * Math.max(...q[out.next]));\n      q[s][a] += 0.2 * (target - q[s][a]);\n      s = out.next;\n      if (out.terminated) break;\n    }\n  }\n  return q;\n}\n/**\n * 冻结 Q 表，从指定位置回放；40 步仍未到达记为截断。\n * @param {number[][]} q 本例训练得到的 Q 表。\n * @param {boolean} bonus 仅用于记录该版本累计奖励。\n * @param {number} start 测试起点 0、1、2。\n * @returns {{success:boolean, truncated:boolean, steps:number, reward:number, path:number[]}} 回放。\n */\nexport function evaluate(q, bonus, start = 0) {\n  let s = start, reward = 0;\n  const path = [s];\n  for (let t = 1; t <= 40; t++) {\n    const out = step(s, greedy(q[s]), bonus);\n    reward += out.reward; s = out.next; path.push(s);\n    if (out.terminated) return { success: true, truncated: false, steps: t, reward, path };\n  }\n  return { success: false, truncated: true, steps: 40, reward, path };\n}\nfor (const bonus of [true, false]) {\n  const q = train(bonus, 1);\n  console.log(bonus ? \"repeat-bonus\" : \"goal-only\", evaluate(q, bonus));\n}\n```\n\n每次训练从位置 0 开始，最多采集 40 步，再重置；这是外部采集上限，不是游戏中的倒计时失败。因此第 40 步只要未到终点，更新时仍保留后续价值。[Gymnasium 时间限制说明](https://gymnasium.farama.org/tutorials/gymnasium_basics/handling_time_limits/) 区分任务终止 terminated 与外部截断 truncated，不能把两者都当作价值归零。\n\n若实际游戏规定“40 步内不到终点就失败”，那是另一份任务合同：需把剩余步数放进观察，并按真正终止处理。本文 evaluate 的 40 步只是观察窗口，未完成记 truncated；不把它说成 NPC 已死亡或游戏判负。evaluate 假定输入来自本例 train，正式加载外部策略时还需校验 Q 表尺寸及有限数值。"
+    },
+    {
+      "heading": "本次实跑：高分不等于完成任务",
+      "body": "正文代码在 Node.js 22.16.0 运行，seed=1、从位置 0 出发，结果如下。累计奖励是未折扣的回放总和；Q 值估计的是折扣回报，两者不能直接混比。\n\n| 奖励版本 | 前几个位置 | 抵达终点 | 步数 | 累计奖励 |\n| --- | --- | --- | --- | --- |\n| A：重复补给加分 | 0→1→2→1→2→1… | 否，截断 | 40 | 19.60 |\n| B：只保留终点与步耗 | 0→1→2→3 | 是 | 3 | 1.97 |\n| 规则基线：始终向右，以 B 计分 | 0→1→2→3 | 是 | 3 | 1.97 |\n\nA 的 20 次进入补给点，减去 40×0.01，得到 19.60；B 的终点奖励减去三步消耗，得到 1.97。这解释了“高分却不完成”，但奖励版本已经改变，不能把两列分数当作同一把尺子排名。\n\n另从零训练 seeds=1、2、3、4、5，每张表分别从位置 0、1、2 做一次无探索回放：A 共 15 次均截断；B 共 15 次均成功，对应步数都是 3、2、1。相同种子重复训练、左边界、终点停止、非法动作及 Q 表回放不变也已检查。\n\n**这是真实执行的表格强化学习实验，不是手工填模型输出；但它只覆盖一个确定性四格环境。** 五个种子改变训练探索，不等于五张新地图；三个起点也都是训练可见状态，不能称为泛化测试。没有真实玩家、视觉输入或引擎碰撞结果。"
+    },
+    {
+      "heading": "可复制提示词：让生成式助手审奖励，保留独立裁判",
+      "body": "生成式助手可作为制作期审阅者，帮助提出奖励漏洞与反例；它和真正从经验学习的 Q-learning 是两种不同用途。本次没有调用外部聊天模型获取实验数据。可把规则、代码和轨迹交给已有助手：\n\n```text\n审阅一个赛跑 NPC 的强化学习奖励合同。\n位置 0、1、2、3，左右移动，左边界停在 0，到 3 立即终止。\n目标：尽快抵达 3。奖励：每步 -0.01，到 3 额外 +2，\n每次进入 1 额外 +1。外部最多采集 40 步后重置，不是任务失败。\n\n请只输出：\n1. 一条不抵达终点却能重复得分的合法动作序列及逐步收益；\n2. 一个最小奖励修改候选，说明它引入的学习难点；\n3. 三个独立于累计奖励的验收项和一个能推翻候选的反例。\n不要修改成功条件，不要编造训练结果，不把轨迹合法当成策略有效。\n```\n\n先由人核对反例，再修改奖励版本、重新从零训练。删除密集奖励在本例有效，但长地图可能更难探索到终点；不能推导成“所有游戏都只给终点奖励”。\n\n若改为“每个补给点只奖一次”，必须把已领取状态纳入环境与观察：同一位置在领取前后的奖励不同，只有位置的 Q 表就不再描述完整状态。还要确认重置确实清空该状态。不要靠验收时临时禁止走回头路，掩盖训练合同的问题；若正式改变合法动作，必须重训并单列规则版本。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：离线训练，端侧查表",
+      "body": "首版只迁移离散的小行为，例如回合制敌人的几种站位选择。连续物理、复杂视野和大量组合状态不能直接塞进这张四行表；四格赛道用规则基线已经够用，训练方案的价值在于帮助审计更复杂任务。\n\n1. 在开发机把规则提为不依赖画面的模块，训练与游戏共用状态编码、动作含义及终止条件。记录规则版本、奖励版本、训练种子和 Q 表。\n2. 通过 [Cocos Creator 3.8 JSON 资源](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 导入批准的策略数据，读取 JsonAsset.json；校验版本、表形状与有限数值。不要把 Node 训练循环放进客户端 update。\n3. 到逻辑决策点才选动作；动作执行层核对当前状态和合法性，再驱动已有移动、碰撞、动画。到终点后由游戏状态机停止决策，不继续发训练奖励。\n4. 先回放同一状态/动作轨迹，逐步比较训练环境与游戏结果。映射不一致时修环境或适配层，不能只相信离线成功次数。\n\n| 运行约束 | 本期方案 |\n| --- | --- |\n| 端侧或云端 | 开发机 CPU 训练；运行时端侧查批准 Q 表，不调用云模型 |\n| 延迟与负载 | 每次决策比较两个数；仍测目标构建中决策 P95、动作执行与帧耗时，多 NPC 按逻辑节拍分摊 |\n| 费用 | 无逐次 API 推理费；保留训练机器时间、迭代与设备测试成本，本次未做费用或性能测量 |\n| 缓存 | 按规则、状态编码、动作表与策略版本缓存 Q 表；不能跨版本复用相同位置编号 |\n| 降级 | 表缺失、非有限值、状态未覆盖或动作非法时使用已验收规则策略；本例为向右，实际项目按合法动作定义 |\n\nWeb/H5、小游戏和移动原生端可复用 JSON 与规则协议；PC/主机迁移同一审计方法，但各自测加载和执行。改成神经策略或云推理后，要重新测模型体积、内存、排队、超时和费用，不能引用本表的查表成本。本练习只用原创字符与规则，不引入外部游戏素材或权重。"
+    },
+    {
+      "heading": "验收看任务、漏洞和迁移，不能只看奖励",
+      "body": "把累计奖励保留为训练诊断项，正式验收另外列：\n\n| 指标 | 记录口径 |\n| --- | --- |\n| 任务成功 | 到达指定终点的次数 / 全部验收回放；截断与错误保留在分母 |\n| 完成效率 | 成功回放的步数，同时列截断数；不能只展示最快的一局 |\n| 漏洞迹象 | 重复访问、原地等待、重复领取等轨迹；看是否符合玩法意图，不把一切回头都算错误 |\n| 稳定与迁移 | 分训练种子报告，再测试未参与调参的新布局、起点或机制；按场景分组 |\n| 游戏体验 | 真人观察可读性、难度与反应；高成功率不等于好玩或像人 |\n\n保留规则基线，它能揭示训练是否带来必要收益。本期 B 与简单向右规则一样快，没有证据支持为了四格场景增加训练管线。更复杂项目如果使用程序化地图做测试，要保存地图和规则种子，并留出未调参的布局；随机换一个数却仍生成同一结构，不能算覆盖扩大。\n\n表格 Q-learning 是成熟方法；把奖励审计接到具体游戏仍是实验方案。扩展到多智能体、像素输入或学习式奖励属于额外研究与工程工作，本期结果不替它们背书。"
+    },
+    {
+      "heading": "25 分钟练习：留下一个漏洞和一份修复证据",
+      "body": "1. 4 分钟：画四格直道，把真正成功条件与两版奖励写开，手算 0→1→2→1 的收益。\n2. 6 分钟：复制代码运行，保留 A 的循环轨迹与 B 的终点轨迹；核对 19.60 和 1.97 的来源。\n3. 5 分钟：重复五个训练种子，在冻结策略后换三个起点；记录成功、截断和步数，不继续训练评估中的 Q 表。\n4. 7 分钟：用提示词审一条候选修复，或人工审阅并注明；已有 Cocos/Web 原型时用四个色块回放，核对终点停止。没有工程则明确记“引擎验收待做”。\n5. 3 分钟：保存规则、奖励版本、代码、训练种子、结果与一个新环境待测项。先解释代理为何这么做，再决定是否需要扩大训练。\n\n完成物是一条可复现的奖励漏洞、一项被实际测试的修改，以及不依赖奖励分数的成功记录。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "OpenAI — Faulty reward functions in the wild（2016-12-21，CoastRunners 历史案例）",
+      "url": "https://openai.com/index/faulty-reward-functions/"
+    },
+    {
+      "title": "Gymnasium — Solving Frozenlake with Tabular Q-Learning（页面标注兼容 1.4.0，2026-10-26 核验）",
+      "url": "https://gymnasium.farama.org/tutorials/training_agents/frozenlake_q_learning/"
+    },
+    {
+      "title": "Gymnasium — Handling Time Limits（页面标注兼容 1.4.0，2026-10-26 核验）",
+      "url": "https://gymnasium.farama.org/tutorials/gymnasium_basics/handling_time_limits/"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS — JSON 资源",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
