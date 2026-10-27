@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-27",
+  "tags": [
+    "performance",
+    "frontier",
+    "testing"
+  ],
+  "title": "接入神经超分之前：测清场景、重建与 UI 的帧预算",
+  "summary": "把 3D 场景缩小再用 AI 重建，节省的像素工作能否抵消推理成本？从 DLSS 公开接入要求出发，区分神经超分与普通放大，给 Cocos/Web 做一个保留清晰 UI 的对照实验。附可运行统计代码、反例与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 接入前实验",
+  "scope": "Cocos Creator 3.8 LTS 的 RenderTexture；Web/H5 基础实验；小游戏、移动及 PC/主机按平台另验",
+  "sections": [
+    {
+      "heading": "场景：草叶变清楚了，伤害数字还读得清吗？",
+      "body": "一款俯视角 3D 动作游戏，满屏草叶、粒子和敌人时出现长帧。团队想把场景从 1920×1080 降到 1280×720，再用神经超分重建到输出尺寸。此时要回答三件事：节省了什么工作、重建新增多少成本、移动中的信息是否仍可靠。\n\n输入像素量变为原来的 4/9，是尺寸算术；CPU 逻辑、几何处理、阴影和最终 UI 不会因此都缩为 4/9。**先测完整路径，再决定是否引入模型。** 本文场景、测试协议和数字数组均为原创教学示例，没有运行神经超分、Cocos 或真机，也没有测得加速比例。\n\n| 技术 | 工作方式 | 本期定位 |\n| --- | --- | --- |\n| 双线性放大 | 按邻近像素插值，无训练 | 低成本对照 |\n| FSR 1 | 传统空间重建及锐化，无学习模型 | 解释“超分”不一定是 AI |\n| DLSS Super Resolution | 使用学习模型重建更高分辨率画面 | 公开 AI 工具案例 |\n| 帧生成 | 增加中间显示帧 | 与本期超分分开验收 |\n\n超分处理已有渲染信号，不负责创造关卡、更新碰撞或判断命中。状态机、行为树和搜索仍照常决定玩法；程序化生成提供场景数据。这些技术与渲染模型可以组合，但不能把所有工作归到 AI 名下。"
+    },
+    {
+      "heading": "公开案例：DLSS 接的是渲染管线，不是一张截图",
+      "body": "本次打开的 [NVIDIA Streamline DLSS 指南](https://raw.githubusercontent.com/NVIDIAGameWorks/Streamline/main/docs/ProgrammingGuideDLSS.md) 标为 **2.14.16**。它要求输入颜色、深度、运动向量和输出缓冲，并提供硬件支持检查、推荐输入尺寸与每帧参数接口。运动向量的单位和相机抖动等信息必须匹配实际管线；仅把画布截图交给普通图片模型，不等价于这套接入。\n\n这是已有公开工具的集成资料，本文不将文档版本称为 DLSS 模型版本，也不报道新品。该入口使用原生 Direct3D/Vulkan 设备，不能直接当作 Cocos Web 的 JavaScript 插件；PC 项目也要先检查实际适配器、驱动与引擎接入能力。移动及主机各有平台路径，不能由 PC 支持推导为通用支持。\n\n作为对照，[AMD 的 FSR 1 官方说明](https://gpuopen.com/fidelityfx-superresolution/) 描述的是单帧空间算法，不依赖运动向量或历史帧，包含放大和锐化。这里特指 FSR 1 文档及其 1.1 历史版本，不能把“无需模型”套到整个 FSR 家族。其管线位置也不能照搬给 DLSS。\n\n可迁移的原则是：保留原生分辨率基线、列清模型需要的渲染信号、在接入前定义成功标准。普通缩放对照是实用方法；给自己的管线接神经超分属于工程实验；自行训练适配模型则是额外研究。本期只完成第一层的协议和统计验证。"
+    },
+    {
+      "heading": "Cocos 最小实验：只降场景分辨率，UI 最后画",
+      "body": "先用已有工程做三档：A 为原生尺寸；B 为低分辨率场景加双线性放大；C 仅在已有受支持接入时换成目标超分。B 能发现项目是否对像素工作敏感，但不能预测 C 的画质或速度。没有 SDK 就明确留下 C 待测，不必先安装一套新管线。\n\n[Cocos Creator 3.8 RenderTexture 文档](https://docs.cocos.com/creator/3.8/manual/en/asset/render-texture.html) 支持设置宽高、作为相机 targetTexture，并交给 Sprite 或材质显示。基于这些能力，本期提出以下原型步骤：\n\n1. 固定输出画布的物理像素、相机路线、敌人数量和特效；记录设备像素比，避免只改 CSS 尺寸。A 与 B 保持同一视野和宽高比。\n2. 将世界相机输出到较小的 RenderTexture；用显示层将它放大到相同输出尺寸。按项目已有层与相机可见范围隔离世界、显示层和 HUD，避免世界相机再次拍到显示自身纹理的节点。\n3. 原分辨率 UI 相机最后绘制血条文字、按钮和伤害数字；确认清屏与相机顺序不会擦掉背景。输入命中仍使用 UI 的坐标体系。\n4. 先验证普通放大没有上下翻转、色彩异常或重复绘制，再录同一段走动。使用自定义材质时按文档处理 RenderTexture 的采样方向；不在每帧用 readPixels 把画面搬到 CPU。\n5. 分辨率改变时统一更新渲染目标与相关参数，释放不再使用的资源；先做固定档位，不急着加入自动切档。\n\n这是基于官方接口的整合建议，尚未在引擎里验证。纯 2D 界面型小游戏若主要负担来自脚本或提交，可能很难从这条路径受益；像素画也可能需要保持整数比例和指定采样。Web/H5 的试验结构可迁移，小游戏容器、移动原生与 PC/主机的后端能力和内存都要单独测。"
+    },
+    {
+      "heading": "先计同一帧总量，再看 P95：一段可运行的账本",
+      "body": "在同一条顺序 GPU 路径里，低分辨率场景节省的时间，必须覆盖放大重建及新增拷贝、合成等开销。下面把每帧分成三个互不重叠的阶段，第三项还要纳入其余 GPU 工作；存在异步重叠时应直接计完整区间，不能把重叠段重复相加。\n\n保存为 gpu-budget.mjs，用 node gpu-budget.mjs 运行。它只统计输入的耗时，不执行模型、不采集 GPU：\n\n```javascript\n/**\n * @file 汇总同一帧内顺序执行的三个 GPU 阶段；不测量设备。\n * @Author liliwei\n * @Date 2026-10-27\n * @LastEditors liliwei\n * @LastEditTime 2026-10-27\n */\n/**\n * @param {number[][]} rows 每行 [场景, 放大重建, UI及剩余GPU工作]，单位 ms。\n * @param {number} budgetMs GPU 路径检查线，不是输入延迟目标。\n * @returns {{n:number,p50Ms:number,p95Ms:number,overBudget:number}}\n * 先逐帧相加，再用最近秩法取分位数；不修改输入。\n */\nexport function auditGpu(rows, budgetMs = 1000 / 60) {\n  if (!Array.isArray(rows) || rows.length === 0 ||\n      !Number.isFinite(budgetMs) || budgetMs <= 0) {\n    throw new TypeError(\"需要非空样本和正数预算\");\n  }\n  const totals = Array.from(rows, row => {\n    if (!Array.isArray(row) || row.length !== 3 ||\n        !Array.from(row).every(x => Number.isFinite(x) && x >= 0)) {\n      throw new TypeError(\"每行需要三个非负有限耗时\");\n    }\n    const total = row[0] + row[1] + row[2];\n    if (!Number.isFinite(total)) throw new RangeError(\"耗时溢出\");\n    return total;\n  });\n  const sorted = [...totals].sort((a, b) => a - b);\n  return {\n    n: totals.length,\n    p50Ms: sorted[Math.ceil(0.50 * sorted.length) - 1],\n    p95Ms: sorted[Math.ceil(0.95 * sorted.length) - 1],\n    overBudget: totals.filter(t => t > budgetMs).length\n  };\n}\n\n// 人工构造的教学样本，不是 DLSS、FSR 或设备测量。\nconst native = Array.from({length: 20}, () => [14, 0, 3]);\nconst spiky = Array.from({length: 20}, (_, i) =>\n  [8, i < 18 ? 3 : 9, 3]);\nconst steady = Array.from({length: 20}, () => [9, 4, 3]);\nconsole.log({\n  native: auditGpu(native),\n  spiky: auditGpu(spiky),\n  steady: auditGpu(steady)\n});\n```\n\n本次将代码原样提取，在 Node.js 22.16.0 实跑得到：\n\n| 教学方案（各 20 帧） | GPU 路径 P50 | P95 | 超过 16.67ms 的样本 |\n| --- | --- | --- | --- |\n| native | 17ms | 17ms | 20 |\n| spiky | 14ms | 20ms | 2 |\n| steady | 16ms | 16ms | 0 |\n\nspiky 的大部分帧变短，尾部却更长。先逐帧相加，再排序；三个阶段各自的 P95 相加通常不等于整条路径的 P95。代码采用最近秩定义，20 帧的 P95 是排序后的第 19 个值；这么少的样本只适合讲规则，不足以判断线上稳定性。\n\n若 CPU 每帧仍忙 21ms，GPU 样本全部低于 16.67ms 也不意味着达到 60 FPS。呈现节拍、排队和输入延迟须另测，不能把本表直接换算成玩家帧率。以上数字全部人工构造，既不是厂商测评，也不是神经推理结果。"
+    },
+    {
+      "heading": "怎样取得可用证据，而不是把提交时间当 GPU 时间",
+      "body": "同一设备先预热，再以固定路线分别采集各档，交换测试顺序以减少温升与缓存顺序的影响；记录构建、分辨率、帧数与持续时间。冷启动、首帧编译和稳态分别报告，但不要把真实游戏中的长帧随意删掉。\n\nWebGL 2 可以先检测 [Khronos EXT_disjoint_timer_query_webgl2](https://registry.khronos.org/webgl/extensions/EXT_disjoint_timer_query_webgl2/)；本次核验的是 revision 4、2023-06-01 规范。结果须在后续事件循环中查询，只有可用且没有 disjoint 时才采用；单位为纳秒，换成毫秒要除以 1,000,000。扩展缺失或样本无效应单独计数，不能填 0。\n\nperformance.now() 包住渲染调用通常只能观察 CPU 侧经过时间，不能证明 GPU 已完成。若没有合适的计时入口，就保存帧间隔、主线程记录和“GPU 未测”状态；不要为了取数每帧强制等待 GPU。引擎内接计时器还应避免与已有查询冲突。\n\n| 验收维度 | 应保留的记录 |\n| --- | --- |\n| 性能 | 同一回放的 CPU、GPU 和呈现帧间隔分布；P50/P95、超预算数、无效样本数 |\n| 动态画质 | 相机平移、细线、粒子、遮挡后显露、镜头突切的同位置截图与片段 |\n| 玩法信息 | 血量数字、敌人轮廓、攻击预警是否可读；不能只看静止风景 |\n| 资源 | 渲染目标、模型及历史缓冲的内存；首帧加载、持续温升与耗电 |\n| 交互 | 同一输入到可见反馈的记录；显示帧更多不能替代响应验收 |\n\n本期没有这些设备记录。当前证据只支持“统计方法能识别构造的长尾”，不支持任何方案已达到画质或帧率目标。"
+    },
+    {
+      "heading": "运行时 AI 的预算：算力、历史与降级一起设计",
+      "body": "受支持的神经超分通常把推理放在本机 GPU 的渲染路径中。下表是本期建议的工程约束，不是某款 SDK 已替你完成的功能。\n\n| 项目 | 首轮约束 |\n| --- | --- |\n| 延迟与负载 | 将推理、额外缓冲处理和合成纳入 GPU 预算；检查 CPU 同步与多视口成本，不能只记网络延迟为零 |\n| 费用 | 端侧没有逐帧云 API 账单，仍有显卡算力、电量、模型分发和集成维护成本；SDK 分发条件按所用版本核对 |\n| 缓存 | 可缓存版本明确的模型、着色器与资源；时序重建使用的历史缓冲是算法状态，不是可随意复用的旧截图 |\n| 状态失效 | 在镜头突切、尺寸或视口改变时按对应 SDK 合同重置或更新历史；旧状态是否有效要有检查点 |\n| 降级 | 不支持、初始化失败、长期超预算或明显伪影时切回已验收的缩放或原生档；资源与 UI 一起恢复 |\n\n不建议把本地游戏每帧截图上传云端重建：那会另外引入上传、排队、推理、下载和解码，且画面与当前输入可能错位。云游戏的整条远程渲染链路是另一项架构，不能沿用本期本地 GPU 预算。\n\n本练习只用自有场景或色块，不引入第三方美术、音频或模型文件。本文未下载、分发任何 SDK 或权重，也不因仓库公开就推断全部内容可自由商用；正式集成再按具体组件核验分发许可。"
+    },
+    {
+      "heading": "可复制提示词：让 AI 找缺项，不让它补测量值",
+      "body": "生成式助手还可在制作期审阅实验方案；这与运行时神经重建是两种不同用途。把实际记录和下面的要求一起交给已有模型入口：\n\n```text\n我在 Cocos Creator 3.8.x 中比较渲染方案。\n输出尺寸固定；A=原生渲染，B=低分辨率场景+双线性放大，\nC=目标神经超分（若未集成，明确标待测）。UI 保持输出分辨率。\n输入：构建版本、设备/后端、各档输入尺寸、相同路线、\n逐帧 CPU/GPU/呈现记录、无效样本、动态画质观察。\n请：\n1. 检查比较条件、计时范围和单位是否一致，逐项引用输入证据；\n2. 区分已测事实、假设与缺失数据，不由像素比例推算加速；\n3. 找一个可能推翻“值得接入”的反例，并给最小复测步骤；\n4. 分别评价性能、信息可读性、内存与输入响应。\n没有 C 的真实结果时，只列待测项，不生成速度、画质或费用结论。\n```\n\n练习里可以只给出正文三组模拟数组，检查助手是否误称它们为 GPU 实测。若助手参与分析，记录实际模型、等待时间、用量及人工复核时间；没有模型入口就人工审核同一张表。方案变化后重新审，不把旧结论作为新构建的缓存答案。"
+    },
+    {
+      "heading": "25 分钟练习：做出一张可决定下一步的接入卡",
+      "body": "1. 4 分钟：选一个已有场景，固定输出像素、相机路线和 UI；写清目标平台与当前怀疑的瓶颈。\n2. 6 分钟：运行统计脚本，手算 17、14、20、16ms，确认长尾样本没有丢失；把模拟与设备数据放在不同文件。\n3. 7 分钟：已有 Cocos/Web 工程时做 A/B 两档，检查 UI 与采样方向。没有工程就画渲染顺序并列接口待办，不把安装或完整 SDK 集成塞进本练习。\n4. 5 分钟：采集一段可获得的性能记录，再记录细线、运动边缘和一个 HUD 数字。GPU 计时不可用就明确标缺项；已有 C 接入才加入对照。\n5. 3 分钟：写下继续、暂缓或退回的理由，以及一个可推翻判断的下一步实验。\n\n交付物是一份固定条件、原始记录、统计结果和待测项齐全的接入卡。今天若只能证明“UI 应分开画”或“当前负担主要在 CPU”，这也足以缩小下一轮工作；神经超分的采用决定仍需真实模型和目标设备证据。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "NVIDIA Streamline — DLSS 接入指南（正文版本 2.14.16；2026-10-27 核验 main）",
+      "url": "https://raw.githubusercontent.com/NVIDIAGameWorks/Streamline/main/docs/ProgrammingGuideDLSS.md"
+    },
+    {
+      "title": "AMD GPUOpen — FidelityFX Super Resolution 1（空间算法；页面含 1.1 历史版本）",
+      "url": "https://gpuopen.com/fidelityfx-superresolution/"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS — RenderTexture 官方文档",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/asset/render-texture.html"
+    },
+    {
+      "title": "Khronos — EXT_disjoint_timer_query_webgl2（revision 4，2023-06-01）",
+      "url": "https://registry.khronos.org/webgl/extensions/EXT_disjoint_timer_query_webgl2/"
+    }
+  ]
+}
