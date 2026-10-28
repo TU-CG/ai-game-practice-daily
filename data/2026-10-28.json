@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-28",
+  "tags": [
+    "content",
+    "assets",
+    "testing"
+  ],
+  "title": "让 AI 给对白打时间轴：字幕同步要跟着音频走",
+  "summary": "自动转写能起草对白字幕，却可能听错任务名、在静音里补词，或在暂停后错位。以 Whisper 为公开工具案例，建立转写、人工校时和音频时钟驱动的流程，附可运行字幕代码、Cocos 接入要点与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 接入待实测",
+  "scope": "Cocos Creator 3.8.x（接口核对 3.8.7）/ Web、H5、小游戏；可迁移至移动及 PC/主机",
+  "sections": [
+    {
+      "heading": "场景：台词说完了，字幕为什么还停在上一句？",
+      "body": "一款解谜游戏用三句对白提示玩家：“别碰那盏灯。”“先找回星砂。”“再回来开门。”开发者用 AI 转写起草字幕，再用几个定时器逐句切换。正常播放似乎没问题，暂停两秒、拖回前一句后，文字却继续往下走。这里有两个独立问题：音频里到底说了什么，以及当前播放到了哪一句。\n\n**本期把 AI 放在制作期：语音识别模型提出文本和时间候选，人复核后导出静态字幕，运行时按音频时钟查询。** Whisper 是音频到文本的序列生成模型，用于自动语音识别（ASR）；它不负责生成配音，也没有学习游戏动作或奖励，不属于强化学习。\n\n播放状态机管理开始、暂停和结束，二分查找定位字幕；两者都是普通程序。任务状态、行为树仍可决定播放哪段对白，但不能由转写文本触发开门或发奖。本期三句对白、毫秒时间和代码都是原创教学示例，没有实际录音或模型输出；Whisper 则是公开工具案例。"
+    },
+    {
+      "heading": "公开工具：Whisper 起草转写，时间戳仍需试听",
+      "body": "[Whisper 官方 README](https://raw.githubusercontent.com/openai/whisper/main/README.md) 提供本地 Python 工具和多语言模型。以下以多语言 small 为练习候选，不使用只针对英语的 small.en；small 不是本期测出的最佳模型。本期核验的是 2026-10-28 的 main 文档快照，采用时另记实际包版本、权重与运行设备，不把滚动文档当成今日发布新闻。\n\n已装好 Whisper、FFmpeg 及依赖时，可以先对一份自有录音运行：\n\n```text\nwhisper dialogue.wav --model small --language zh --task transcribe --output_format json --word_timestamps True --output_dir draft\n```\n\n[原作者转写实现](https://raw.githubusercontent.com/openai/whisper/main/whisper/transcribe.py) 中，word_timestamps 使用注意力与动态时间规整估计词级位置，CLI 将它标为实验功能。输出是候选，不能当作逐字精确测量；中文“词”也不等于每个汉字。这里使用 transcribe 保留原语言，没有执行翻译或说话人分离。\n\n[官方模型卡](https://raw.githubusercontent.com/openai/whisper/main/model-card.md) 明确说明，模型可能生成录音里未说出的内容，也可能重复文本。因此要特别试听静音、环境声、专有名词和低声对白。不是发现无声概率较高就能保证消除幻觉，更不能只拿剧情稿对照后自动改成“应该说的台词”。\n\n本文没有安装或运行 Whisper。命令是按当前源码核验的用法，转写质量、推理时间和设备占用均待测；已有录音流程时才做模型对照。"
+    },
+    {
+      "heading": "从候选到入包：先定音频版本，再定字幕边界",
+      "body": "1. 冻结最终剪辑的对白文件，保留音频哈希、语言、台词稿修订及场景 ID。能取得独立人声轨时先用它转写；它必须与最终混音保持同一时间原点，裁掉前置空白后不能直接沿用旧时间。\n2. 保留原始转写，逐句试听校正。“星砂”误成“星沙”属于术语问题；录音实际说错了，则决定重录或按实录标注，不能靠文字掩盖音频差异。静音里多出一句话要删除并记为转写错误。\n3. 将批准结果整理成稳定 id、startMs、endMs、text。原始秒数统一乘 1000 后只取整一次，再检查边界；不把秒直接塞进毫秒字段，也不自动排序来遮掩导出故障。\n4. 首版约定单人声、单字幕轨、互不重叠，允许留白；多人抢话应另做多轨布局，不能简单截短上一句。片段切换时同时切换音频与对应语言包。\n5. 用最终导出、最终构建的音频复核。重新剪辑、替换录音或改变混音偏移后，原时间轴必须失效并重审；只改文件名不代表内容未变。\n\n若手里已有完全匹配的定稿文本，后续可以比较强制对齐工具：它估计给定文字对应的位置，与自由转写再纠错是不同任务。本期不演示该路线，也不把逐词时间戳称为已完成可靠口型同步。\n\n下面的校验器只证明数据可用来查询；一条时间合法、文字却凭空编出的字幕仍会通过。人工听审和结构检查须分别记录。"
+    },
+    {
+      "heading": "可运行代码：按音频时间查找，允许暂停与倒退",
+      "body": "保存为 subtitle-track.mjs，用 node subtitle-track.mjs 运行。时间范围采用左闭右开：到达 startMs 显示，到达 endMs 清除；相邻两句边界相同时只显示下一句。这里只处理已批准的单轨，不解析 Whisper JSON，也不播放音频。\n\n```javascript\n/**\n * @file Validate a single subtitle track and query it by the audio clock.\n * @author liliwei\n * @date 2026-10-28\n * @LastEditors liliwei\n * @LastEditTime 2026-10-28\n */\n/** @typedef {{id:string,startMs:number,endMs:number,text:string}} Cue */\n/**\n * Validate without sorting or changing the input.\n * @param {Cue[]} rows Ordered, non-overlapping subtitle cues.\n * @param {number} durationMs Positive integer duration in milliseconds.\n * @returns {ReadonlyArray<Readonly<Cue>>} A frozen copy.\n */\nexport function compileCues(rows, durationMs) {\n  if (!Array.isArray(rows) || !Number.isSafeInteger(durationMs) ||\n      durationMs <= 0) throw new Error(\"invalid track\");\n  const ids = new Set();\n  let previousEnd = 0;\n  return Object.freeze(Array.from(rows, row => {\n    if (!row || typeof row.id !== \"string\" || !row.id.trim() ||\n        ids.has(row.id) || typeof row.text !== \"string\" || !row.text.trim() ||\n        !Number.isSafeInteger(row.startMs) || !Number.isSafeInteger(row.endMs) ||\n        row.startMs < previousEnd || row.endMs <= row.startMs ||\n        row.endMs > durationMs) throw new Error(\"invalid cue\");\n    ids.add(row.id);\n    previousEnd = row.endMs;\n    return Object.freeze({\n      id: row.id, startMs: row.startMs, endMs: row.endMs, text: row.text\n    });\n  }));\n}\n/**\n * Find the cue in [startMs, endMs), including after a backward seek.\n * @param {ReadonlyArray<Readonly<Cue>>} cues Result of compileCues.\n * @param {number} timeMs Current audio time in milliseconds.\n * @returns {Readonly<Cue>|null} Active cue, or no subtitle.\n */\nexport function cueAt(cues, timeMs) {\n  if (!Number.isFinite(timeMs) || timeMs < 0) return null;\n  let lo = 0, hi = cues.length;\n  while (lo < hi) {\n    const mid = Math.floor((lo + hi) / 2);\n    if (cues[mid].startMs <= timeMs) lo = mid + 1;\n    else hi = mid;\n  }\n  const cue = cues[lo - 1];\n  return cue && timeMs < cue.endMs ? cue : null;\n}\nconst cues = compileCues([\n  { id: \"a\", startMs: 500, endMs: 2000, text: \"别碰那盏灯。\" },\n  { id: \"b\", startMs: 2500, endMs: 4000, text: \"先找回星砂。\" },\n  { id: \"c\", startMs: 4000, endMs: 5500, text: \"再回来开门。\" }\n], 6000);\nconst times = [0, 500, 2000, 2500, 4000, 5500, 4500, 1000, 1000];\nconsole.log(times.map(t => cueAt(cues, t)?.id ?? null));\n```\n\n本次将正文代码原样提取到 Node.js 22.16.0 执行，九个查询得到 [null, \"a\", null, \"b\", \"c\", null, \"c\", \"a\", \"a\"]。\n\n| 人工时间点 | 应显示什么 | 检查目的 |\n| --- | --- | --- |\n| 0ms / 500ms | 空 / a | 片头留白与进入边界 |\n| 2000ms / 2500ms | 空 / b | 句间留白不能延续旧字幕 |\n| 4000ms / 5500ms | c / 空 | 相邻交界与末句结束 |\n| 5500 → 4500 → 1000ms | 空 → c → a | 往回拖动仍能查询 |\n| 连续两次 1000ms | a、a | 模拟暂停时音频时钟不前进 |\n\n加载时校验一次，查询不依赖“上一句”指针，所以无需为倒退补一串定时器。代码拒绝重叠、倒序、重复 ID、越界、空文字和非法时间；空轨合法，查询返回 null。返回值被冻结，避免之后误改边界。\n\n这些毫秒值和文字由人构造，结果仅验证规则。它们没有证明模型识别准确，也没有证明浏览器或手机实际同步精度。"
+    },
+    {
+      "heading": "接回 Cocos：以播放实例为准，文字只在变化时刷新",
+      "body": "本期核对了 [Cocos Engine v3.8.7 的 AudioSource 源码](https://raw.githubusercontent.com/cocos/cocos-engine/v3.8.7/cocos/audio/audio-source.ts)：currentTime 与 duration 的单位是秒，实例提供 play、pause、stop 及 STARTED、ENDED 事件。以下是基于接口提出的接入方案，未在引擎或真机运行。\n\n1. 给这段对白一个专用 AudioSource，关闭循环；使用它的 clip 和 play() 管理播放。不要拿该实例的 currentTime 去追踪 playOneShot 播出的另一份音效。\n2. 预先加载并校验字幕。UI 状态先进入等待，收到实际开始事件后才进入播放；不能以“调用了 play”推断玩家已经听到声音。Web/H5 练习从用户点击开始入口发起播放，并测试首次播放是否成功。\n3. 在组件 update 中读取 audioSource.currentTime * 1000，传给 cueAt；只在字幕 ID 或字幕包版本变化时更新 Label.string。用同一音频时钟查询，避免累计 dt 或 setTimeout 在暂停、后台恢复后继续计时。\n4. 暂停时按项目约定保留当前句；停止、跳过、结束或切场景时显式清空。开始前与结束后不查询，避免时钟归零时又显示第一句。\n5. 拖动时先发起音频跳转，再按实际回读时间刷新；后端寻址未必同步完成，不能只把滑块目标值当实际进度。换语言包时即使 ID 相同也要刷新文字，退出组件时解除本实例的事件监听。\n\n小游戏容器与移动原生的音频后端要分别测加载、后台中断及寻址精度；PC/主机可以复用数据合同和查询逻辑，再验收手柄跳过及远距离阅读。这里适合预录对白；玩家实时语音字幕涉及流式识别、网络与隐私，是另一条运行时方案。"
+    },
+    {
+      "heading": "验收：文本、时间与屏幕分开记分",
+      "body": "先选包含安静对白、专有名词、长停顿和背景音的少量自有片段，人工标注参考文字与边界；固定参考后再评估候选，不让模型自己同时写答案和判分。\n\n| 维度 | 可操作的指标 |\n| --- | --- |\n| 文本 | 中文字符错误率 CER＝替换、删除、插入次数之和 / 参考字符数；先统一是否忽略标点、空白。另列任务名、否定词等关键错误 |\n| 静音误识别 | 人工确认无对白区间内，多出的字幕段数 / 静音分钟数；不要用大量正确对白稀释 |\n| 时间边界 | 对已匹配句子分别统计起点、终点相对人工标注的绝对误差，中位数与 P95；漏句、多句另计 |\n| 屏幕与状态 | 长句换行、缺字、遮挡；暂停、倒退、跳过、后台恢复后有无残留或错句 |\n| 制作投入 | 转写等待、听审、校时与返工总分钟 / 批准音频分钟，和原人工流程对照 |\n\n可先把“边界偏差超过 200ms”设为复核提示，这是教学阈值，需要试听调整，不是通用标准。只有三句时列出全部误差，比拿一个 P95 宣布达标更有用；代码中的毫秒精度不等于感知同步精度。\n\n“静音里有一句不存在的对白”即使时间顺序完美也应失败；“文字全部正确但提前半秒出现”也应单列问题。上线前测最终字幕字号、目标屏幕及实际音频输出，本期没有这些测量值。"
+    },
+    {
+      "heading": "成本与采用边界：模型离线，字幕随包",
+      "body": "本方案在开发机离线转写。记录首次权重下载、冷启动、稳态处理时间、峰值内存及人工修订，先限制为单任务；是否扩大并行取决于测量。没有按玩家次数产生的转写 API 费，但计算、电量、存储与维护仍有成本。\n\n若改用已批准的云转写服务，另记上传、排队、处理、下载、失败重试与真实账单；按总投入除以批准音频分钟比较，不用公开模型的速度推断服务延迟。未公开配音只按项目允许范围发送。\n\n缓存包含音频哈希、语言、模型/包版本、推理选项和人工修订版本；模型不可用时用人工打轴或保留已批准版本。运行时端侧只有音频、静态字幕和查询逻辑，不加载 Whisper 权重，也没有实时推理等待；仍须测下载、解码、Label 更新与内存。资源不匹配时使用已核对的备用字幕或可手动翻页的对白稿，并保留暂停/重读入口。\n\n官方 README 标明 Whisper 代码和权重采用 MIT，所链接许可允许商业使用并要求保留相应版权及许可声明；这不授予输入录音、配音表演或第三方台词的权利。本练习仅使用原创文字和时间数字，未下载或分发模型、录音等资产。正式采用保存具体版本许可及录音来源，不把“模型开源”当作素材授权。\n\n批量转写加人工验收属于实用制作方法；自动逐词打轴和跨平台同步属于待测接入。没有训练新模型或复现前沿研究，也没有可报告的省时比例。"
+    },
+    {
+      "heading": "25 分钟练习：交付一条能暂停、能倒退的字幕轨",
+      "body": "1. 4 分钟：选一段自有短对白，固定音频版本、语言和参考台词；没有录音就使用正文三句模拟数据，并明确注明。\n2. 6 分钟：已有 Whisper 环境才运行一次转写，保留原始 JSON，试听一处停顿和一个任务名。环境未就绪就手工打轴，把模型评估留作下一步，不临时下载整套依赖挤占练习。\n3. 5 分钟：运行正文代码；故意把 b 的起点改成 1900ms，确认重叠被拒绝，再把“星砂”改成错字，确认结构校验不能代替听审。\n4. 7 分钟：在已有 Cocos/Web 工程接一份字幕和播放实例，回放开始、暂停、倒退、跳过及换语言。没有工程时用时间序列检查查询，把引擎同步与设备测量标为待办。\n5. 3 分钟：保存音频/字幕版本、一个静音或术语问题、边界检查记录、实际耗时与未测项。\n\n交付物是一份批准字幕轨和一张播放状态检查表。只有录音确实经过听审、目标构建确实经过回放时，才将相应检查标为通过。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Whisper README：模型、用法与 MIT 声明（main，2026-10-28 核验）",
+      "url": "https://raw.githubusercontent.com/openai/whisper/main/README.md"
+    },
+    {
+      "title": "Whisper 模型卡：ASR 能力与幻觉限制（main，2026-10-28 核验）",
+      "url": "https://raw.githubusercontent.com/openai/whisper/main/model-card.md"
+    },
+    {
+      "title": "Whisper 转写源码：词级时间戳及 CLI 参数（main，2026-10-28 核验）",
+      "url": "https://raw.githubusercontent.com/openai/whisper/main/whisper/transcribe.py"
+    },
+    {
+      "title": "Cocos Engine 3.8.7：AudioSource 播放时钟与状态接口",
+      "url": "https://raw.githubusercontent.com/cocos/cocos-engine/v3.8.7/cocos/audio/audio-source.ts"
+    }
+  ]
+}
