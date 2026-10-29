@@ -1,0 +1,61 @@
+{
+  "date": "2026-10-29",
+  "tags": [
+    "gameplay",
+    "development",
+    "frontier"
+  ],
+  "title": "让 AI 安排 NPC 多步任务：材料没了，就停下重排",
+  "summary": "NPC 接到“做一块木板并交货”，计划生成时材料齐全，执行途中却被别人拿走了。借 Voyager 的技能复用思路，把语言模型规划与逐步执行分开，检查新状态、停止失效计划，再决定是否重排。附可运行代码、Cocos/Web 接入与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 运行时接入实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏；移动与 PC/主机可迁移任务执行协议",
+  "sections": [
+    {
+      "heading": "场景：两步计划没变，世界已经变了",
+      "body": "在一款合作经营游戏里，玩家要求工坊 NPC“做一块木板并交货”。请求时有两份木料，AI 给出 craft → deliver。第一步完成后，另一角色取走木板；若执行器仍照最初快照扣材料，库存可能变成负数，甚至空手交货。\n\n**计划是候选，当前世界才决定下一步能否执行。** 本期用两个技能讲清：解析计划、重查条件、执行一步、读回结果、继续或停止。目标是当前订单的 delivered=true，不是“模型说完成”或“步骤数组跑完”。\n\n语言模型提出动作序列，属于生成式 AI 与智能体规划；动作白名单、库存检查和下面的执行器都是确定性程序。它们没有更新策略参数，不属于强化学习。行为树或状态机可以负责移动、等待和打断；规则完整且状态很小时，也可以用搜索生成同样的计划，无需模型。程序化地图只改变环境，不能自动保证计划可执行。\n\n工坊、提示词、计划与代码均为原创教学示例；没有调用外部模型或运行真实游戏。这个小任务用手写规则就能完成，实验价值是建立长任务的失败处理方式，而非证明两步任务值得接大模型。"
+    },
+    {
+      "heading": "公开案例：Voyager 的技能库为什么还需要反馈",
+      "body": "[Voyager 论文](https://arxiv.org/abs/2305.16291) 的 v2 修订于 2023-10-19，是长期研究背景。它在 Minecraft 中用语言模型提出任务和代码，通过环境反馈与执行错误改进程序，并积累可复用技能；此过程不要求微调模型参数。本文没有复现其实验，也不将论文效果外推到 Cocos。\n\n[原作者 README](https://raw.githubusercontent.com/MineDojo/Voyager/main/README.md) 提供加载技能库、分解任务与执行子目标的流程，并明确提醒任务分解偶尔不合逻辑。核验版本为 2026-10-29 的 main 文档快照；其 Python、Node、Minecraft/Fabric 环境是研究工程依赖，不是浏览器插件。\n\n可迁移的做法是保留“目标—技能—反馈”的闭环。本期提出的工程缩小版只允许选择已实现的 craft、deliver，不运行模型生成的 JavaScript；技能库由开发者维护，模型成功一次也不能自动登记新技能。这是本文的接入建议，并非 Voyager 已提供的 Cocos 功能。公开研究中的开放式技能学习，与这里的固定技能执行实验应分开看待。"
+    },
+    {
+      "heading": "先写技能合同，再让 AI 排顺序",
+      "body": "把订单固定为“交付一块木板”，库存均为非负整数，已经交付就结束。下面是原型合同；制作与交付暂时是瞬时操作，省略寻路、动画、网络和多订单。\n\n| 技能 | 开始前必须成立 | 成功后由游戏确认 |\n| --- | --- | --- |\n| craft | 工作台开放，至少 2 份木料，订单未完成 | 木料减 2，木板加 1 |\n| deliver | 至少 1 块木板，订单未完成 | 木板减 1，订单变为已交付 |\n\n1. 让普通按钮先能调用这两项游戏操作，AI 与按钮共用同一个规则入口。\n2. 每次请求只发送目标、规则版本、技能定义和必要状态快照；返回值限制为有限 JSON。解析失败、未知技能或版本不符时，整份拒绝，不能先执行合法前缀。\n3. 每一步开始前取新状态；条件失败立即停止余下步骤，保留失败动作和当时状态。\n4. 发生失败后，从新快照重新规划。已经做出的木板仍在，就可能只需 deliver；不能把旧计划从头再跑，也不能擅自回滚其他角色的合法操作。\n\n可复制下面的原创提示词；给定状态下，人工期望为 steps=[\"deliver\"]，它不是本期模型实测输出。\n\n```text\n你是工坊 NPC 的计划助手，只输出 JSON，不输出代码或解释。\n目标：当前订单 delivered=true。\n规则版本 workshop-v1；技能只有：\ncraft：benchOpen=true 且 wood>=2；消耗 2 wood，增加 1 plank。\ndeliver：plank>=1 且尚未交付；消耗 1 plank，令 delivered=true。\n只用给定技能，最多 4 步，尽量少步骤；不可达或已经完成时返回空步骤。\n格式：{\"ruleVersion\":\"workshop-v1\",\"steps\":[\"craft\",\"deliver\"]}\n以下状态只是请求时快照，执行器会每步重新检查。\n当前状态：{\"wood\":0,\"plank\":1,\"benchOpen\":false,\"delivered\":false}\n上一计划失败：craft，原因是材料不足；不要盲目重放旧计划。\n```\n\n空步骤表示没有提出可执行方案。执行器仍检查目标：本来已完成才算 success，否则为 incomplete；不能把模型弃答当作任务完成。"
+    },
+    {
+      "heading": "可运行实验：每次只推进一步，失败就封住旧计划",
+      "body": "保存为 guarded-plan.mjs，运行 node guarded-plan.mjs。makeRunner 接收模型候选的 JSON 字符串；每次调用返回新状态，不修改传入对象。实际项目须把返回状态交给唯一的游戏状态持有者，本例只是同步模拟器。\n\n```js\n/**\n * @file A synchronous workshop simulator with guarded plan execution.\n * @author liliwei\n * @date 2026-10-29\n * @LastEditors liliwei\n * @LastEditTime 2026-10-29\n */\n/** Check an authoritative toy-world snapshot. @param {object} s World. @returns {void} */\nfunction checkWorld(s) {\n  if (!s || typeof s !== 'object' || Array.isArray(s) ||\n      !['wood', 'plank'].every(k => Number.isSafeInteger(s[k]) && s[k] >= 0) ||\n      typeof s.benchOpen !== 'boolean' || typeof s.delivered !== 'boolean') {\n    throw new TypeError('Invalid world');\n  }\n}\nconst skills = {\n  craft: {\n    /** @param {object} s Current world. @returns {boolean} Whether crafting is legal. */\n    can: s => s.benchOpen && s.wood >= 2 && s.plank < Number.MAX_SAFE_INTEGER,\n    /** @param {object} s Current world. @returns {object} Committed toy-world state. */\n    apply: s => ({ ...s, wood: s.wood - 2, plank: s.plank + 1 })\n  },\n  deliver: {\n    /** @param {object} s Current world. @returns {boolean} Whether delivery is legal. */\n    can: s => s.plank >= 1,\n    /** @param {object} s Current world. @returns {object} Committed toy-world state. */\n    apply: s => ({ ...s, plank: s.plank - 1, delivered: true })\n  }\n};\n/** Parse a bounded plan. @param {string} raw JSON text. @returns {Function} One-step runner. */\nexport function makeRunner(raw) {\n  if (typeof raw !== 'string' || raw.length > 2048) throw new TypeError('Invalid plan text');\n  const p = JSON.parse(raw);\n  if (!p || typeof p !== 'object' || Array.isArray(p) ||\n      Object.keys(p).sort().join(',') !== 'ruleVersion,steps' ||\n      p.ruleVersion !== 'workshop-v1' || !Array.isArray(p.steps) || p.steps.length > 4 ||\n      !p.steps.every(id => typeof id === 'string' && Object.hasOwn(skills, id))) {\n    throw new TypeError('Invalid plan');\n  }\n  const steps = [...p.steps];\n  let cursor = 0, stopped = false;\n  /** Advance once using fresh state. @param {object} s World. @returns {object} Status and new state. */\n  return function step(s) {\n    checkWorld(s);\n    const state = { ...s };\n    if (stopped) return { status: 'stopped', state };\n    if (state.delivered) { stopped = true; return { status: 'success', state }; }\n    if (cursor === steps.length) { stopped = true; return { status: 'incomplete', state }; }\n    const id = steps[cursor], skill = skills[id];\n    if (!skill.can(state)) {\n      stopped = true;\n      return { status: 'blocked', action: id, state };\n    }\n    const next = skill.apply(state);\n    checkWorld(next);\n    cursor++;\n    const status = next.delivered ? 'success' : cursor === steps.length ? 'incomplete' : 'running';\n    stopped = status !== 'running';\n    return { status, action: id, state: next };\n  };\n}\nconst plan = JSON.stringify({ ruleVersion: 'workshop-v1', steps: ['craft', 'deliver'] });\nconst start = { wood: 2, plank: 0, benchOpen: true, delivered: false };\nconst normal = makeRunner(plan);\nconst first = normal(start);\nconsole.log('normal', first.status, normal(first.state).status);\nconst interrupted = makeRunner(plan);\nconst made = interrupted(start);\nconst changed = { ...made.state, plank: 0 }; // 另一角色拿走木板\nconsole.log('interrupted', made.status, interrupted(changed).status);\n```\n\n正文代码在 Node.js 22.16.0 原样运行：normal 输出 running、success；interrupted 输出 running、blocked。正常交付后 wood=0、plank=0、delivered=true；木板被拿走时保持 plank=0、delivered=false。停止后的执行器再次收到状态只返回 stopped，恢复资源后也要显式创建新计划。\n\n数组用完但订单未完成时返回 incomplete；交付完成就停止，计划尾部的重复交付不会继续执行。本例仅针对一个订单。真实多订单要按 orderId 保存完成标记，不能共用一个全局布尔值。\n\n这里的 apply 就是玩具世界的同步结算，并非异步引擎接口；代码没有实现寻路、动作完成后的权威回读、取消或服务器事务。这些差距要在接入时补上，不能把本次规则测试当作联机正确性证明。"
+    },
+    {
+      "heading": "接到 Cocos：等待动画期间，条件仍可能失效",
+      "body": "[Cocos Creator 3.8 LTS 的 JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 支持把 JSON 导入为 JsonAsset，并通过 json 属性读取。可用它保存审核后的技能描述、规则版本和备用计划；动作实现留在 TypeScript 中。以下是尚未在引擎运行的整合方案。\n\n1. 给 NPC 维护 Idle、Planning、Executing、Blocked 状态。目标变化或场景退出时递增本地 runId；模型回复和动作回调都携带原 runId，旧回调不再推进当前任务。\n2. 移动到工作台、播放制作动画属于技能内部步骤，可由行为树、状态机和寻路完成。每个技能只能有一个执行中的实例，防止 update 每帧启动一次制作。\n3. 动画开始前检查一次；真正扣材料时再原子检查并结算。若允许其他角色拿材料，可使用服务端预约或条件写入。单纯先检查、等待动画、再无条件扣减，仍存在竞争窗口。\n4. 动作返回后读取权威订单与库存，核对该动作的结算结果，再推进下一步。动画结束、网络请求已发送、模型回复“成功”，都不能替代这次确认。\n5. 联机结算以 orderId + actionId 去重。取消等待不代表服务器已撤销操作；超时或断线后先查询实际结果，再决定重试。runId 只能防旧回调推进，不足以防重复扣款或交货。\n\nCocos/Web、H5 与小游戏可共用协议，首次实验先做单机即时结算，再接异步动画。移动原生及 PC/主机也可复用任务层，但具体联网、后台恢复与导航能力要各自验证；帧级战斗反应继续由本地控制器处理。"
+    },
+    {
+      "heading": "验收：记录完成了什么，也记录为什么停",
+      "body": "把固定脚本计划与 AI 候选放进同一批场景。分别测试初始材料齐全、材料不足、已有木板、工作台关闭，以及制作后材料被取走；不要只回放顺利路径。\n\n| 维度 | 记录方式 |\n| --- | --- |\n| 目标完成 | 在给定时限内真正交付的任务数 / 全部任务数；失败、拒绝与超时留在分母 |\n| 规则完整 | 负库存、重复交付、旧回调继续执行的次数；任何一个都要查结算路径 |\n| 中断处理 | 能拦住的非法动作数，以及本来可完成却被停住的任务数；分原因列出 |\n| 规划质量 | 未知动作、错误版本、不可达顺序、无谓重复制作与重排次数 |\n| 体验与投入 | 玩家等待 P50/P95、任务总时间、调用量、实际费用；另列失败任务 |\n\n本次规则检查还覆盖了：先 deliver 后 craft 会被拦住；只有 craft 会产生木板但以 incomplete 结束；初始已有木板可直接交付；材料恢复不会唤醒旧计划。未知动作与错误版本在执行前拒绝，输入状态不变、实例相互独立。检查结果来自人工构造数据，不是模型规划成功率。\n\n前置检查只能避免某些坏动作，不能保证模型找到最优路线，也无法解释玩家意图。若计划需要另一角色“稍后归还木板”，本合同没有等待技能，停止是预期；应由明确的新事件触发重排，不能每帧请求模型。"
+    },
+    {
+      "heading": "运行时预算：低频规划，端侧执行，失败可继续玩",
+      "body": "本期建议的实验架构是云端模型只生成高层计划，端侧运行已写好的技能；联机库存仍由权威服务器结算。也可以在开发阶段批量生成并审核计划，随包发布，先验证体验是否需要运行时变化。\n\n| 项目 | 原型约束与测量 |\n| --- | --- |\n| 延迟 | 分别记上传、排队、推理、校验和首动作等待；不能只报模型吐出第一个字的时间 |\n| 请求负载 | 每个 NPC 同时最多 1 个规划请求，场景总并发先设 2；只在新目标或相关状态变化时触发 |\n| 费用 | 每任务累计全部尝试的输入/输出用量和实际账单，再按成功任务计算；没有实价时不预填金额 |\n| 等待与降级 | 首轮可设 2 秒规划截止和最多 1 次失败重排；超限进入普通等待/手动操作，原任务仍可由玩家处理 |\n| 缓存 | 按规则版本、技能版本、目标及相关状态签名存候选计划；命中也须逐步重验，不能缓存“已成功”结论 |\n\n上述 2 秒、并发 2 与一次重排只是可测的练习预算，未经设备与服务测量，不能视作性能承诺。材料、工作台或订单变更使相关候选失效；聊天语气变化不必重算整个任务。断网时回退到已审核脚本或普通交互，不阻塞玩家操作。\n\n端侧模型是另一条实验路线，需要另测权重下载、内存、持续功耗和与渲染的竞争，不能由桌面体验推断 H5 或小游戏可用。本次未调用云模型、部署端侧模型、运行 Cocos 或测设备，没有延迟和费用实测。\n\n练习只使用原创文字和规则，不使用研究项目的美术、音频或游戏资产。若后续引入第三方素材或模型服务，应另按具体版本核实商用条件；本文没有为这些素材作授权判断。"
+    },
+    {
+      "heading": "25 分钟练习：交一份能停住、能重排的任务记录",
+      "body": "1. 4 分钟：画出两步任务，写明当前订单、材料、工作台条件和唯一的成功标记。\n2. 6 分钟：运行正文代码，保存正常与中断输出；把计划改成只有 craft，确认“跑完步骤”仍不能算交货成功。\n3. 5 分钟：给已有助手发送提示词，或手写候选并注明。测试已有木板时只交付、无材料时弃答，记录原始回复与解析结果。\n4. 7 分钟：已有 Cocos/Web 原型时，在制作动画期间取走材料，再点击取消与重新下单，检查结算前的复核和旧回调。没有工程就完成同步脚本轨迹，把异步与联网列为待测。\n5. 3 分钟：保存规则版本、一次成功、一次被拦住的动作、新计划与未测项；判断错误属于规划、执行还是状态同步。\n\n完成物是一份技能合同、两条可复现轨迹和一次明确的停止/重排决定。固定技能与规则检查可用于实际工程；运行时模型规划仍需场景评估；开放式生成新技能则属于额外研究，不应由本练习的通过直接推导为可上线。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Voyager 论文：arXiv 2305.16291，v2 / 2023-10-19（研究背景，未复现）",
+      "url": "https://arxiv.org/abs/2305.16291"
+    },
+    {
+      "title": "MineDojo/Voyager 原作者 README：main，2026-10-29 核验快照",
+      "url": "https://raw.githubusercontent.com/MineDojo/Voyager/main/README.md"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
