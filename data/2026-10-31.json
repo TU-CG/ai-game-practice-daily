@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-31",
+  "tags": [
+    "operations",
+    "testing",
+    "design"
+  ],
+  "title": "让 AI 预测玩家卡关：先按玩家划分训练与验收",
+  "summary": "想在解谜玩家停滞时提供提示，模型却可能只认出了见过的人。用一个实际运行的最近邻实验，理解按记录拆分的虚高分数，建立玩家与时间边界，再把预测接到可拒绝的提示入口。附审阅提示词、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用评估方法 / 提示推荐实验",
+  "scope": "Cocos Creator 3.8.x / Web/H5、小游戏和移动游戏的新手帮助；方法可迁移到 PC/主机。代码在 Node.js 22.16.0 运行，使用原创合成数据。来源核验于 2026-10-31：scikit-learn 文档标为 1.9.1，Cocos 为 3.8 LTS；未安装 scikit-learn，未运行真实玩家模型或引擎。",
+  "sections": [
+    {
+      "heading": "场景：想帮新玩家，却只在熟悉的记录上拿到高分",
+      "body": "一款解谜小游戏准备在玩家持续停滞时亮起“要一点提示吗”。团队从每位试玩者身上截出许多行为窗口，随机分成训练和测试；分数很好，新一批玩家却频繁收到不合时宜的提醒。可能的原因是：同一个人的相似窗口出现在两边，测试没有回答“遇到没见过的人怎么办”。\n\n**本期目标是评估新玩家的短期卡关预测，再决定是否值得做提示实验。** 监督机器学习从历史特征和结果标签中学习对应关系；下面的 1-NN 保存训练样本，预测时取最近样本的标签，属于基于实例的学习。它不是生成式模型，也没有用奖励训练动作，不属于强化学习。\n\n“可提示、已拒绝、冷却中”由普通状态机管理。NPC 行为树、寻路和程序化关卡照常工作，预测器只提供一个候选信号。场景、数据和代码均为原创教学示例；没有真实玩家数据，也没有商业游戏上线案例。今天讲长期方法，相关公开工具是 scikit-learn。"
+    },
+    {
+      "heading": "先写样本合同：预测时能知道什么",
+      "body": "首版只研究同一关卡、同一规则版本。每次尝试在累计 30 秒前台有效操作时间处取一个快照；用之后 60 秒是否完成预定进展点作为标签。暂停、过场和切后台不计入这条有效时钟。30/60 秒是练习设定，不是通用标准。\n\n| 字段 | 用法与边界 |\n| --- | --- |\n| playerGroup、attemptId、build、levelId | 用于分组、去重和追溯，不直接把玩家标识当预测特征 |\n| 前 30 秒有效操作数、无效交互数、最长空闲 | 候选输入；定义和计算只看快照之前 |\n| 之后 60 秒仍无进展：y=1；有进展：y=0 | 训练标签，不能混进输入 |\n| 后续观察不足、日志丢失 | 标为 unknown，并另记比例；不能当作已通关或已卡关 |\n\n一条输入要能回答“当时的游戏客户端是否已经知道这个值”。整局最终失败次数、最终通关时长、后来是否点了提示，都不能回填成第 30 秒的特征。无效交互只表示没有推进当前规则，不证明玩家困惑或想要帮助。\n\n首轮可用现有提示策略不变的观察记录，并保存玩家是否用过帮助；若后续窗口内发生提示介入，标签描述的是该既有策略下的结果，不是“完全不给帮助时会怎样”。退出导致观察不完整，应单列退出问题，不能悄悄按正例处理。"
+    },
+    {
+      "heading": "划分顺序：先隔开玩家，再处理特征和调参",
+      "body": "1. 先冻结样本口径和玩家分组表，把同一玩家的所有相关尝试留在同一侧；重复导出、重叠窗口也要一起处理。不能把“玩家 ID 不作为特征”误当作已经消除关联。\n2. 在训练玩家内部再留验证玩家，用来选特征、邻居数或提示阈值；最终验收玩家只用于最后检查。看过验收错误后继续调参，就应另留新批次。\n3. 缺失值填补、标准化和特征选择都只在训练侧拟合；验证与验收复用这套变换。[scikit-learn 的泄漏说明](https://scikit-learn.org/stable/common_pitfalls.html) 明确建议先划分再预处理，并用 Pipeline 减少误用。\n4. 想回答“下周新来的玩家能否用”，还要按时间截断：训练标签的观察结束时间早于截止点，验收来自截止后首次出现的新玩家。同一版本也可能因活动和渠道变化而变，按玩家拆分不会自动解决时间漂移。\n\n[GroupShuffleSplit 官方接口](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupShuffleSplit.html) 可按传入的 groups 产生划分，test_size 指组的比例，不是记录比例；多次划分的测试组还可能重合。它不会自动保证时间先后或类别均衡，应检查每侧玩家数、记录数、正例数和时间范围。\n\n如果任务改成“预测已知老玩家的未来表现”，允许使用该玩家过去的数据可能合理，但仍必须按时间隔开，杜绝未来信息。那是另一份验收合同，不能拿它的分数承诺新玩家效果。"
+    },
+    {
+      "heading": "可运行反例：不输入玩家 ID，仍可能认出同一个人",
+      "body": "下面只保留一个人工特征 x，代表两次记录几乎不变的操作特征；它不是“用点击速度判断卡关”的建议。八位虚构玩家各两条记录，标签交替设置，使相邻玩家标签相反。按记录拆时，每位玩家的一条进训练，另一条进验收；按玩家拆时，两边各四人、各八条。\n\n保存为 player-split.mjs，用 node player-split.mjs 运行。分类器只读取 x 和训练标签，不读取 player；同距离时取训练数组先出现的样本，这是本例明示的规则。\n\n```js\n/**\n * @file 用合成玩家样本演示 1-NN 验收中的分组泄漏。\n * @author liliwei\n * @date 2026-10-31\n * @LastEditors liliwei\n * @LastEditTime 2026-10-31\n */\n/** 保存带标签的训练样本；返回单特征预测函数。\n * @param {Array<{x:number,y:number}>} train 仅训练集。\n * @returns {(x:number)=>number} 预测类别 0 或 1；等距取先出现者。\n */\nexport function fit1NN(train) {\n  if (!Array.isArray(train) || !train.length) throw Error(\"训练集不能为空\");\n  const points = Array.from(train, r => {\n    if (!r || !Number.isFinite(r.x) || ![0, 1].includes(r.y))\n      throw Error(\"需要有限特征与二元标签\");\n    return { x: r.x, y: r.y };\n  });\n  return x => {\n    if (!Number.isFinite(x)) throw Error(\"预测特征必须有限\");\n    let best = points[0], distance = Math.abs(x - best.x);\n    for (const p of points) {\n      const d = Math.abs(x - p.x);\n      if (d < distance) { best = p; distance = d; }\n    }\n    return best.y;\n  };\n}\n// 8 位虚构玩家各两条近似记录；标签交替设置，使相邻玩家具有不同标签。\nexport const rows = Array.from({ length: 8 }, (_, p) =>\n  [0, 1].map(repeat => ({\n    player: \"p\" + p, repeat, x: 100 * (p + 1) + repeat, y: p % 2\n  }))\n).flat();\nconst trainPlayers = new Set([\"p0\", \"p1\", \"p4\", \"p5\"]);\nexport const cases = [\n  { name: \"按记录拆\", train: rows.filter(r => r.repeat === 0),\n    test: rows.filter(r => r.repeat === 1) },\n  { name: \"按玩家拆\", train: rows.filter(r => trainPlayers.has(r.player)),\n    test: rows.filter(r => !trainPlayers.has(r.player)) }\n];\n/** 仅统计本例已知合法的样本，不替代真实日志校验。\n * @param {object} split 训练与验收记录。\n * @returns {object} 重合玩家数、命中数及逐条预测。\n */\nexport function evaluate({ name, train, test }) {\n  const predict = fit1NN(train);\n  const seen = new Set(train.map(r => r.player));\n  const overlap = new Set(test.filter(r => seen.has(r.player))\n    .map(r => r.player)).size;\n  const predicted = test.map(r => predict(r.x));\n  return { name, trainRows: train.length, testRows: test.length,\n    overlapPlayers: overlap,\n    correct: predicted.filter((y, i) => y === test[i].y).length,\n    predicted };\n}\nconsole.table(cases.map(evaluate));\n```\n\n本次将正文代码原样提取到 Node.js 22.16.0，得到：\n\n| 划分 | 训练 / 验收记录 | 两边重合玩家 | 验收命中 |\n| --- | --- | --- | --- |\n| 按记录拆 | 8 / 8 | 8 | 8/8，100% |\n| 按玩家拆 | 8 / 8 | 0 | 2/8，25% |\n| 恒猜 0，作用于上述任一验收集 | 不训练 | 不适用 | 4/8，50% |\n\n第一行的近邻就是同一玩家另一条记录，距离仅为 1。第二行留下 p2、p3、p6、p7；例如 p2 的 x=300/301 最近的是训练中的 p1，标签却相反。按玩家拆得到的预测依次为 [1,1,0,0,1,1,1,1]，只有 p7 两条命中。\n\n**这是刻意构造、真实执行的分类反例，不是真实卡关准确率。** 两行测试对象不同，不能解释成同一测试集上的模型退化，也不能据此宣称最近邻通常只有 25%。八人远不足以估计生产效果；本实验只说明，训练记录条数相同、又删掉玩家 ID，仍不足以证明新玩家泛化。"
+    },
+    {
+      "heading": "公开工具与验收：预测正确，不等于提示有效",
+      "body": "[scikit-learn 的 KNeighborsClassifier](https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html) 提供近邻投票分类，n_neighbors=1 可作最小基线；默认值为 5。本期独立 JavaScript 只演示单特征 1-NN，没有调用或复刻完整库。本文核验的文档标为 1.9.1，属于已有工具资料，不是今日发布消息。\n\n真实特征可能同时包含次数和毫秒，直接算距离会受量纲影响；先在训练侧拟合变换，再冻结。模型候选与“连续无进展达到阈值”等规则基线使用相同玩家划分、相同标签和相同缺失处理，不能只给 AI 更干净的样本。\n\n| 检查项 | 应记录的分子、分母或证据 |\n| --- | --- |\n| 卡关召回 | 被预测为 1 的实际正例 / 全部已知正例；unknown 另外报告 |\n| 误提醒风险 | 预测为 1、实际为 0 的数量 / 全部预测为 1；分母为零记未定义 |\n| 分组稳定性 | 按玩家、关卡、设备分别看；同时报独立玩家数，别把重叠窗口当成独立人数 |\n| 真实体验 | 每人提醒次数、拒绝次数、提示使用与后续进展；模型命中和界面效果分别验收 |\n\n即使预测对了“没有进展”，也不能推出“弹提示会改善体验”：玩家可能在探索、看风景或主动挑战。先静默记录预测，再做可拒绝的小范围提示试验；要判断提示是否带来改善，需要设计独立对照，不能只比较主动点提示的人和没点的人。离线分类分数不能直接变成留存或通关收益。\n\n生成式助手可以审阅数据合同，但不替你补结果。把实际字段表和少量合成行附给下面的提示词：\n\n```text\n目标：在第 30 秒预测随后 60 秒内是否仍无指定进展，服务新玩家。\n请逐字段标出：预测当时可用 / 之后才知道 / 信息不足，并写理由。\n检查同一玩家、重复导出、重叠窗口是否跨训练和验收。\n检查填补、标准化与阈值选择在哪个集合完成。\n列出 unknown 的处理和时间截止规则；不能删除失败记录来提高分数。\n区分“预测卡关”与“提示造成改善”，只引用给定证据，不虚构准确率。\n```"
+    },
+    {
+      "heading": "接到 Cocos / Web：先做可拒绝的提示信号",
+      "body": "以下是本期提出的接入方案，尚未在引擎中运行。首版先用固定记录驱动界面，再接真正通过验收的模型。\n\n1. 在关卡服务记录前台有效时间与进展事件，到约定快照点生成一次特征；暂停、重开和切关卡时更新 attemptId，不在每帧反复请求。\n2. 首轮选择后端预测，只发送必要特征及 build、levelId、featureVersion。服务返回模型版本、快照编号与候选类别；客户端核对仍是同一次尝试，且玩家尚未取得新进展。\n3. 候选为 1 时，由普通状态机决定是否亮起“需要提示吗”。玩家可忽略、拒绝或手动打开；同一次尝试最多主动提醒一次，刚关闭时不立即重弹。模型不自动展示解答。\n4. 已审核提示按关卡、进展点和语言存成 JSON。[Cocos Creator 3.8 JSON 文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 支持 JsonAsset 及 json 属性；选哪条提示由当前可信游戏状态决定，模型不临时编造通关条件。\n5. 先测试迟到回复、暂停恢复、已经通关、缺字段与模型版本不符；所有情况都保留普通手动帮助入口。\n\n小游戏、H5 与移动端可迁移特征协议和提示状态机；PC/主机也可复用，再验收键鼠、手柄与各自网络路径。Python 训练出的对象不能直接作为 Cocos JsonAsset 执行；若以后改端侧模型，需选实际支持的推理路径，并验证转换前后输出一致。"
+    },
+    {
+      "heading": "运行预算与边界：一个候选信号也要有完整成本",
+      "body": "| 项目 | 本期建议的首轮约束 |\n| --- | --- |\n| 端侧 / 云端 | 开发机离线训练，后端低频预测；端侧只采样和显示审核提示 |\n| 延迟 | 记录快照到候选可用的 P50/P95及超时；可先设 1 秒等待上限，迟到不再追着玩家弹出 |\n| 负载 | 每次尝试至多一个预测请求；服务限制队列和并发，按实际进入快照点的用户量压测 |\n| 费用 | 计训练、服务计算、流量、失败重试和维护；按总请求与有效帮助分别核算，不预填单价 |\n| 缓存 | 包含特征、特征版本、模型版本、关卡规则版本；同一快照可复用，取得进展后旧候选失效 |\n| 降级 | 服务错误、超时、未知输入或版本不符时保留手动提示，不把缺结果当成“不需要帮助” |\n\n1 秒只是待测预算，不是服务实测。1-NN 的朴素查询会随训练样本增加而增加比较量，不能从这 8 条样本推断大规模延迟；不应把真实玩家训练记录直接随游戏包分发。端侧路线还需测包体、内存、推理与渲染争用，本期未进行这类部署。\n\n按玩家划分和数据时间审计是可用的评估方法；自动预测并主动提醒属于需要真实数据验证的体验实验。它没有证明动态改难度、更换关卡或强化学习干预可行。本练习只使用原创数字和文字，不引入外部美术音频、模型权重或玩家个人资料。"
+    },
+    {
+      "heading": "25 分钟练习：先交一份可信的验收表",
+      "body": "1. 4 分钟：选一个已有进展点，写预测时刻、观察窗口和 unknown 规则；圈出两项只能在未来知道的字段。\n2. 6 分钟：运行代码，核对 8/8、2/8 与玩家重合数；手算 p2 的最近训练样本，再确认改 player 字符串不会改变距离计算。\n3. 5 分钟：用提示词审阅自己的字段表，或人工检查并注明。已有合规日志时先只做玩家、重复记录与时间边界审计，不急着训练。\n4. 7 分钟：在已有 Cocos/Web 原型回放一个候选、一个迟到回复和一次玩家拒绝；没有工程时画状态表，明确引擎与设备验收待做。\n5. 3 分钟：保存玩家划分、样本版本、逐条预测、误提醒反例与未测项，写下继续收集哪类证据。\n\n完成物是一份可以解释“测试了谁、预测时知道什么”的记录。先让验收对象与上线对象一致，再投入模型调参；是否值得主动提醒，交给下一轮真实体验证据。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "scikit-learn 1.9.1：GroupShuffleSplit，按组划分与比例含义（2026-10-31 核验）",
+      "url": "https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.GroupShuffleSplit.html"
+    },
+    {
+      "title": "scikit-learn 1.9.1：Common pitfalls，预处理与数据泄漏（2026-10-31 核验）",
+      "url": "https://scikit-learn.org/stable/common_pitfalls.html"
+    },
+    {
+      "title": "scikit-learn 1.9.1：KNeighborsClassifier，近邻投票分类（2026-10-31 核验）",
+      "url": "https://scikit-learn.org/stable/modules/generated/sklearn.neighbors.KNeighborsClassifier.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-10-31 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
