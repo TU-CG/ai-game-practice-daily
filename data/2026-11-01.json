@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-01",
+  "title": "让 AI 写背包转移：用性质测试抓住被上限吞掉的道具",
+  "summary": "背包两格数量都没超上限，道具却悄悄减少了。让 AI 根据明确合同起草代码，用 fast-check 搜索并缩减失败输入，再用守恒、方向与完成条件检验修复。附真实运行结果、可复制提示词、Cocos/Web 接入与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创规则实验",
+  "scope": "制作期编程与测试；Node.js 22.16.0 / fast-check 4.10.2；Cocos Creator 3.8.x、Web/H5 与小游戏；移动及 PC/主机可迁移规则合同",
+  "tags": [
+    "development",
+    "testing"
+  ],
+  "sections": [
+    {
+      "heading": "场景：数量没越界，道具却少了",
+      "body": "一款收集小游戏允许把同类道具拖到另一格。原格有 7 个，目标格有 9 个，每格上限 10；玩家要求搬 5 个，正确结果应是原格 6 个、目标格 10 个。若代码先从原格扣掉 5 个，再把目标格截到 10，就会得到 2 和 10，总数从 16 变成 12。两个格子都没有越界，四个道具却消失了。\n\n**让 AI 起草实现和测试之前，先写清每次操作必须保持的规则。** 本期用生成式编程助手提出候选，再用性质测试搜索违反规则的输入。性质测试按约束生成数据、执行断言，并尝试缩减失败输入；fast-check 是普通测试库，不是机器学习模型。这里没有训练奖励、强化学习，也没有用程序化关卡生成替代测试。\n\n拖拽、取消和等待回包仍由普通状态机控制；NPC 行为树即使会调用背包操作，也应使用同一规则入口。本期聚焦制作期编程与验收，场景、故障代码和实验均为原创教学示例，不是某款游戏的线上事故，也不是对某个编程模型的效果评测。"
+    },
+    {
+      "heading": "先冻结合同，再把任务交给 AI",
+      "body": "把范围限定为：两个不同格子、相同物品、同步结算；a 是原格数量，b 是目标格数量，n 是请求数量，三者均为 0–10 的整数，每格容量固定为 10。允许部分转移，剩余物品留在原格。跨物品、同一格、网络重试与存档另测。\n\n| 必须成立的规则 | 独立检查方式 |\n| --- | --- |\n| 数量合法 | 输出仍为 0–10 的整数 |\n| 总数守恒 | 操作后两格之和等于操作前 |\n| 方向与请求受限 | 从原格搬走的量至少为 0，且不超过 n |\n| 尽可能完成请求 | 结束时，必须是搬够 n、原格已空、目标格已满三者之一 |\n\n最后一条很关键：永远返回原数据也能通过守恒检查，却没有完成玩家操作。以下提示词适用于已有编程助手；先让人审核合同与断言，再接受补丁。\n\n```text\n你在协助实现游戏背包的同类道具转移。\n输入 a、b、n 均为 0..10 整数，容量 10，两个格子不同。\n允许部分搬运，未搬完的留在原格。禁止丢失、复制或反向搬运。\n先用文字列出独立于实现的性质，指出“只检查总数”漏掉什么。\n再提供纯函数候选，以及 fast-check 4.10.2 的输入生成器和性质测试。\n覆盖空原格、满目标格、零请求、请求大于库存、目标仅余一格空间。\n不要改上限或弱化性质让测试变绿；不引入引擎、网络或新依赖。\n拿到失败输入后，只提出最小修复和手算结果。没有执行就标记未运行。\n```\n\n保存原始候选、人工修改和测试版本。把失败反例交回助手时，同时附上合同；否则它可能通过改期望值、删除边界输入来“修复”测试。"
+    },
+    {
+      "heading": "公开工具：用 fast-check 生成输入并缩减反例",
+      "body": "[fast-check 官方入门](https://fast-check.dev/docs/introduction/getting-started/) 将测试分成输入生成器、性质和执行器，并介绍失败后的 shrinking。缩减目标是得到更易解释的反例；不要把结果宣称为所有输入中的全局最小值。本期固定使用 [v4.10.2](https://github.com/dubzzz/fast-check/releases/tag/v4.10.2)，文档于 2026-11-01 核验，属于长期工具教程，不是今日发布新闻。\n\n在一个独立练习目录运行 npm install --save-dev --save-exact fast-check@4.10.2，保留 lockfile。将下列完整代码保存为 transfer-properties.mjs，用 node transfer-properties.mjs 运行。本次实际环境是 Node.js 22.16.0；无需安装 Cocos 或测试框架。broken 是故意保留的错误版，transfer 是修复版。\n\n```javascript\n/**\n * @file Reproduce and shrink an inventory transfer bug with independent rule properties.\n * @author liliwei\n * @date 2026-11-01\n * @LastEditors liliwei\n * @LastEditTime 2026-11-01\n */\nimport fc from 'fast-check';\n\nconst CAP = 10;\nconst quantity = fc.integer({ min: 0, max: CAP });\n\n/** @param {number} a Source count. @param {number} b Destination count.\n * @param {number} n Requested count. @returns {number[]} Deliberately broken counts. */\nexport function broken(a, b, n) {\n  const moved = Math.min(a, n);\n  return [a - moved, Math.min(CAP, b + moved)];\n}\n\n/** @param {number} a Source count. @param {number} b Destination count.\n * @param {number} n Requested count. @returns {number[]} Counts after a legal transfer. */\nexport function transfer(a, b, n) {\n  const moved = Math.min(a, n, CAP - b);\n  return [a - moved, b + moved];\n}\n\n/** Check trusted integer inputs in 0..10 against rules, without copying the transfer formula.\n * @param {Function} fn Candidate operation. @param {number} a Source count.\n * @param {number} b Destination count. @param {number} n Requested count.\n * @returns {boolean} Whether bounds, conservation, direction and completion hold. */\nexport function followsRules(fn, a, b, n) {\n  const [left, right] = fn(a, b, n);\n  const moved = a - left;\n  return [left, right].every(x => Number.isInteger(x) && x >= 0 && x <= CAP)\n    && left + right === a + b\n    && moved >= 0 && moved <= n\n    && (moved === n || left === 0 || right === CAP);\n}\n\n/** @param {Function} fn Candidate operation. @returns {object} Generated rule property. */\nexport function property(fn) {\n  return fc.property(quantity, quantity, quantity,\n    (a, b, n) => followsRules(fn, a, b, n));\n}\n\nconst options = { seed: 20261101, numRuns: 1000 };\nconst failure = fc.check(property(broken), options);\nconsole.log(JSON.stringify({ failed: failure.failed, seed: failure.seed,\n  path: failure.counterexamplePath, example: failure.counterexample,\n  runs: failure.numRuns, shrinks: failure.numShrinks }));\nfc.assert(property(transfer), options);\nconsole.log('fixed: passed 1000 generated cases');\n```\n\n代码只接受合同范围内的可信整数；followsRules 是输出检查器，不是外部输入校验器。生产入口仍要拒绝 NaN、负数、小数、越界数量和无效格子，不能直接把字符串转成数字后无条件调用。"
+    },
+    {
+      "heading": "本次实跑：保留反例，也保留重放条件",
+      "body": "正文代码实际得到 failed=true、seed=20261101、path=\"1:9\"、example=[7,4,7]、runs=2、shrinks=1。随后修复版通过 1,000 次生成测试。生成次数允许包含重复输入，不能写成覆盖了 1,000 个不同场景。\n\n| 输入 a、b、n | 错误结果 | 正确结果 | 说明 |\n| --- | --- | --- | --- |\n| 7、4、7 | 0、10 | 1、10 | 实跑缩减反例；原有 11 个，错误版只剩 10 个 |\n| 7、9、5 | 2、10 | 6、10 | 开篇手算例；目标只能接收 1 个 |\n| 1、10、1 | 0、10 | 1、10 | 人工补充的小反例；目标已满，应完全不动 |\n\n第三行不是工具本次缩出来的结果。缩减受生成器和搜索路径影响，所以既保存工具输出，也把有解释力的边界固化成普通回归用例。\n\n[官方参数文档](https://fast-check.dev/docs/api/interfaces/Parameters/) 说明 path 可与 seed 一起重放失败。保持包版本、生成器、性质和选项不变，在同一脚本末尾调用 fc.check(property(broken), {seed: 20261101, path: '1:9', numRuns: 1000})，本次已确认仍得到同一反例。实际项目的 CI 应用 fc.assert 检查待发布实现，使失败能终止流水线；此处用 fc.check 只是为了展示预期失败后继续比较修复版。"
+    },
+    {
+      "heading": "反过来测试“测试”：不搬东西不能算通过",
+      "body": "本次额外把候选换成永远返回 [a,b] 的空操作。只检查总数时，它通过 1,000 次生成测试；使用正文完整性质后，被 [1,0,1] 拦住：原格有货、目标有空位、请求非零，却没有搬运。这说明“所有测试绿了”还要看测试到底要求了什么。\n\n因为输入空间很小，还穷举了 a、b、n 各自 0–10 的全部 11³=1,331 组：错误版有 385 组违反性质，空操作有 1,000 组违反性质，修复版为 0。修复结果还与“每轮只搬一个，直到搬够、原格空或目标满”的独立参考逐组相同，并通过 6 个手算边界例。穷举用于这次小算术域，不需要假装随机测试更适合所有问题。\n\n这些数字是规则实验，不是线上故障率、AI 代码可靠率或性能提升。容量改成 99、加入物品类型与绑定标记后，输入域和性质都需要重新定义。多步拖拽、异步回包与持久化也不在这 1,331 组里；应另补序列与集成测试。"
+    },
+    {
+      "heading": "接回 Cocos / Web：测试调用真正使用的规则核心",
+      "body": "以下为接入建议，本期没有启动 Cocos 或真机。\n\n1. 将正式 transfer 核心放到不依赖节点、动画或网络的 TypeScript 模块中。游戏和测试导入同一份实现；不要在测试目录另抄一份“看起来相同”的函数。fast-check 及故障版仅留开发侧。\n2. UI 只提出原格 ID、目标格 ID 和请求量。规则入口先检查格子存在、两个 ID 不同、物品可合并、数量合法，再读取当前库存；同格拖拽按项目规则返回不变或拒绝，不进入本例两格运算。\n3. 一次结算同时写入两格，然后刷新数量和播放动画。联机背包由权威服务器结算，客户端表现不能代替确认；本期纯函数未实现事务、重试去重或回滚。\n4. 把 [7,4,7] 等批准样例保存为含规则版本、输入和期望结果的 JSON。Cocos Creator 3.8 LTS 可将 [JSON 资源](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 导入为 JsonAsset，并从 json 属性读取；测试场景按样例驱动真实入口，检查数据与 UI 同时一致。\n\n小游戏、H5 和移动端可共用这类纯规则与夹具，但要在实际构建验收触摸取消、面板关闭和断网。PC/主机项目可迁移同一合同与反例，使用自身语言的测试工具；不能将本次 Node 结果直接视为所有平台已通过。"
+    },
+    {
+      "heading": "验收与投入：按确认的缺陷和可接受补丁计数",
+      "body": "| 记录项 | 用途 |\n| --- | --- |\n| 合同覆盖 | 空格、满格、零请求、部分转移等规则是否有对应证据 |\n| 失败可重放 | 反例、seed/path、依赖锁文件、代码与规则版本齐全 |\n| 测试有效性 | 能否拦住丢失、复制和空操作等故意注入的错误；单独记录误报 |\n| 修复与回归 | 原反例通过，原有性质未被删改，相关集成场景完成 |\n| 实际投入 | 助手等待、用量费用、审阅时间、测试运行与返工时间 |\n\n这里的 AI 在制作期通过已有云端或本地编程助手运行；游戏运行时只执行普通背包逻辑，没有新增模型请求、推理延迟或逐玩家费用。开发侧可先限制为一个候选、一次失败反馈，记录实际耗时和账单后再决定是否扩大，不预设“节省百分之多少”。\n\n缓存复用以需求、代码、性质及依赖版本的哈希为依据。测试种子用于重放，不应永远只跑一个种子：保存失败例作固定回归，同时安排变化种子的探索；换版本后重验。助手不可用时人工编写候选，照常运行同一套检查。本期没有额外调用外部编程模型，也没有生成或采用第三方美术音频素材。"
+    },
+    {
+      "heading": "25 分钟练习：交付一个有反证的修复",
+      "body": "1. 4 分钟：写清两格合同，手算 7、9、5 的结果，再找出“只验不越界”和“只验总数”各自漏掉的错误。\n2. 6 分钟：在已有 Node 环境安装固定版本并运行正文，保存真实 seed/path 和反例；安装受阻则先手算，不填写虚构运行结果。\n3. 5 分钟：向已有助手提交提示词与反例，审阅最小修复；无助手时手改并注明。确认它没有修改容量或删掉性质。\n4. 7 分钟：换成空操作，确认完整性质会报错；把原反例加入普通回归。已有 Cocos/Web 工程时再回放一次部分转移，没有工程则把 UI 与联机验证列为待办。\n5. 3 分钟：保存合同、补丁、实际输出和未覆盖项。完成物应能说明“哪个规则被破坏、如何复现、修复为何成立”，而不只是一个绿色截图。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "fast-check Getting Started：输入生成、性质与 shrinking（滚动文档，2026-11-01 核验；本例固定 4.10.2）",
+      "url": "https://fast-check.dev/docs/introduction/getting-started/"
+    },
+    {
+      "title": "fast-check Parameters：numRuns、seed 与 path 重放（滚动文档，2026-11-01 核验）",
+      "url": "https://fast-check.dev/docs/api/interfaces/Parameters/"
+    },
+    {
+      "title": "fast-check v4.10.2：原作者版本发布记录（本次实装版本；非今日新闻）",
+      "url": "https://github.com/dubzzz/fast-check/releases/tag/v4.10.2"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-01 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
