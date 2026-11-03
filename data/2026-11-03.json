@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-03",
+  "tags": [
+    "content",
+    "gameplay",
+    "design"
+  ],
+  "title": "让 AI 写 NPC 闲聊：先管住角色知道什么",
+  "summary": "玩家还没找到海洞，守塔人却先说出了入口。把世界事实、角色知识和玩家进度分开，让 AI 只起草允许的信息，再用审核台词与条件选择器控制出场。附 Ghostwriter 公开案例、64 组实跑状态、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创规则实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏与移动端；PC/主机可迁移叙事数据与验收方法",
+  "sections": [
+    {
+      "heading": "场景：一句自然的闲聊，提前揭开了谜底",
+      "body": "一款港口解谜游戏想让守塔人多说几句。团队把整份剧情设定交给语言模型，得到“海洞入口那么窄，你可得小心”。句子自然、符合人设，却在玩家尚未发现海洞时播放了。还有反向问题：玩家已经查明船长走私，守塔人并未获知，却突然跟着评论真相。\n\n**世界里是真的、这个角色知道、当前允许向玩家提及，是三件事。** 本期只做不会推动主线的环境闲聊：每句涉及的事实，必须同时属于角色知识和玩家已获知信息。揭示新线索的任务对白走单独的编剧分支，不能套用这条“双方已经知道”规则。\n\n生成式模型在制作期起草措辞；运行时用普通条件过滤与选句，不是在线大模型 NPC，也不是强化学习。状态机或行为树决定何时闲聊，搜索可枚举叙事状态，程序化生成可组合已批准内容；这些规则步骤本身不等于机器学习。港口、台词、提示词与代码均为原创教学示例，本次没有调用外部模型或运行游戏引擎。"
+    },
+    {
+      "heading": "公开案例：先生成候选，再由作者决定采用",
+      "body": "[Ubisoft 在 2023-03-21 介绍 Ghostwriter](https://news.ubisoft.com/en-us/article/7Cm07zbBGy4Xml6WgYi25d/the-convergence-of-ai-and-creativity-introducing-ghostwriter)：这是 La Forge 的内部工具，面向事件触发的 NPC 短句（barks）起草变体；编剧提供角色与情境，再选择和修改候选。本文借鉴其制作流程，不声称它向公众开放、已接入 Cocos，或替它报告省时比例。这是历史案例，不是今日新品新闻。\n\n[Yarn Spinner 的 storylet / saliency 文档](https://docs.yarnspinner.dev/write-yarn-scripts/advanced-scripting/storylets-and-saliency-a-primer) 展示了按条件选择对白片段：内置策略先过滤条件不成立的内容，再决定呈现哪一项。这是叙事编排能力，不是生成模型。本文依据 2026-11-03 滚动文档说明思路，未安装、锁定或运行其软件包；下文 JavaScript 也不是该工具的实现。\n\n可迁移的分工是：AI 扩展表达，作者审核语义，游戏读取批准目录。先定义哪些信息可以出现，再追求变体数量；把同一句秘密换十种说法，仍是十句会剧透的台词。"
+    },
+    {
+      "heading": "制作合同：先切出允许事实，再写提示词",
+      "body": "把剧情拆成带稳定 ID 的小事实。下表的玩家状态是初次进入灯塔；“知道”由任务系统的明确事件记录，不靠对白模型猜测。这里使用固定剧情版本中的已发生事实，不处理谣言、遗忘和世界事实反转。\n\n| 事实 ID | 作者确认的内容 | 守塔人此时知道 | 玩家此时知道 | 本次可用于闲聊 |\n| --- | --- | --- | --- | --- |\n| storm | 港口曾遭暴风雨 | 是 | 是 | 是 |\n| cave | 东岸有一处入口狭窄的海洞 | 是 | 否 | 否 |\n| culprit | 船长参与走私 | 否 | 否 | 否 |\n\n1. 作者先维护世界事实表、角色知识表和玩家进度。为当前写作任务取角色知识与允许提及信息的交集，只发送这份小包；不要把完整秘密写进“禁止提及”列表后又喂给同一次生成。\n2. 固定角色语气、触发场景与长度，要求模型给出文本和所用事实 ID。模型只提议这些标签；人工检查一句话是否还暗示了未列出的地点、人物关系或事件。\n3. 人工修改并批准后，再分配稳定台词 ID、条件和目录顺序。approved、角色知识与进度标记由制作流程和游戏负责，模型不能自行授予。\n\n可复制到已有文本模型入口的提示词如下。只附当前批准的事实包；“至多 24 字”是本次 UI 原型约束，不是通用台词标准。\n\n```text\n为港口解谜游戏起草守塔人的环境闲聊。\n语气：朴实、关心旅人；不推进任务，不发布奖励或新目标。\n本批唯一允许使用的世界事实：\nstorm：港口曾遭暴风雨。\n写 3 个变体，每句至多 24 个汉字或标点。\n可表达角色情绪，不得新增地点、人名、事件或因果解释。\n只返回 JSON 数组，每项为 {text, factIds, reviewNote}。\nfactIds 只能引用本批给出的 ID；不确定处写入 reviewNote。\n不要返回 approved、任务状态或执行指令。\n```\n\n条件收窄只能减少不需要的上下文，不能保证模型不会凭空补故事。候选仍须逐句读审；没有模型入口时可先手写三句，照样验证后续流程，并注明没有模型评测。"
+    },
+    {
+      "heading": "可运行选择器：双方都知道，才进入候选",
+      "body": "保存为 bark-selector.mjs，用 node bark-selector.mjs 运行。目录顺序由作者确定；选择第一个满足条件、且不是上一句的条目。没有候选就返回 null，保持安静。这里刻意不加随机性，方便复现；它不是完整对话系统。\n\n```javascript\n/**\n * @file Demonstrate approved NPC bark selection from declared narrative facts.\n * @author liliwei\n * @date 2026-11-03\n * @LastEditors liliwei\n * @LastEditTime 2026-11-03\n */\nconst factIds = new Set(['storm', 'cave', 'culprit']);\n\n/**\n * Pick the first eligible line from an editorially ordered, validated catalog.\n * @param {Array<object>} lines Reviewed rows; each has id, speaker, text, facts, approved.\n * @param {object} state Trusted snapshot: speaker, speakerFacts, playerFacts, lastId.\n * @returns {object|null} Original catalog row, or null to remain silent. Does not mutate inputs.\n */\nexport function pickBark(lines, state) {\n  const known = new Set(state.speakerFacts);\n  const revealed = new Set(state.playerFacts);\n  return lines.find(line =>\n    line.approved === true &&\n    line.speaker === state.speaker &&\n    line.id !== state.lastId &&\n    Array.isArray(line.facts) &&\n    line.facts.every(id =>\n      factIds.has(id) && known.has(id) && revealed.has(id)\n    )\n  ) ?? null;\n}\n\n// Original teaching text. Ordering and approval are human decisions.\nexport const lines = [\n  {id: 'recap', speaker: 'keeper', facts: ['culprit'],\n    text: '船长竟参与走私，真让人难过。', approved: true},\n  {id: 'route', speaker: 'keeper', facts: ['cave'],\n    text: '那处海洞的入口很窄。', approved: true},\n  {id: 'weather', speaker: 'keeper', facts: ['storm'],\n    text: '那场风暴真大，想起来还后怕。', approved: true},\n  {id: 'draft', speaker: 'keeper', facts: ['storm'],\n    text: '这句尚未审核。', approved: false},\n];\nexport const base = {\n  speaker: 'keeper', speakerFacts: ['storm', 'cave'],\n  playerFacts: ['storm'], lastId: null,\n};\nexport const scenarios = [\n  base,\n  {...base, playerFacts: ['storm', 'cave']},\n  {...base, playerFacts: ['storm', 'cave', 'culprit']},\n  {...base, speakerFacts: ['storm', 'cave', 'culprit']},\n  {...base, lastId: 'weather'},\n];\nconsole.log(scenarios.map(state => pickBark(lines, state)?.id ?? null));\n```\n\n传入的是已经校验结构的目录与任务系统快照。导入阶段还应检查唯一 ID、非空文本、合法角色、语言及剧情版本，禁止稀疏数组等异常结构；此短函数不是通用 JSON 校验器。facts=[] 可用于经人确认不含剧情事实的问候，不代表任意文字都能留空标签。返回对象来自原目录，调用方只读使用。\n\nlastId 只避免连续重复同一句，不实现播放冷却、语音队列或跨 NPC 去重。调用方应在实际展示后记录它，未展示或资源加载失败时不更新；若只剩上一句，本例选择沉默。"
+    },
+    {
+      "heading": "实跑结果：条件通过，不等于台词含义正确",
+      "body": "正文代码在 Node.js 22.16.0 实际运行，输出 [weather, route, route, weather, null]。对应五个手工情境如下：\n\n| 情境 | 输出 | 原因 |\n| --- | --- | --- |\n| 初到灯塔 | weather | 双方只共同知道风暴 |\n| 玩家已知海洞 | route | 海洞信息现在双方都知道 |\n| 玩家已知全部，守塔人仍不知走私 | route | 玩家知道不等于角色知道 |\n| 守塔人已知全部，玩家仍只知风暴 | weather | 角色知道不等于可以说给玩家听 |\n| 初到灯塔且上一句为 weather | null | 唯一可用句刚说过，本例保持安静 |\n\n另将双方对三个事实的知情与否完整枚举：各有 8 种组合，共 64 组。按独立位掩码期望逐组核对，得到 recap 16 组、route 12 组、weather 9 组、沉默 27 组；草稿没有入选。还检查了多事实必须全部满足、角色不匹配、空目录、中性问候、上一句跳过、8 项不合规元数据与输入不变。组合中包括剧情上未必可达的状态，用于检查规则边界；这些数字不是玩家行为分布或模型准确率。\n\n最重要的反例是：把“船长就是走私者。”错误标成 facts=[\"storm\"]，并误设 approved=true。代码仍会放行，因为它不理解中文含义。将它撤回未批准状态，或把事实标为 culprit，初始状态下才会拦住。这个实跑反例要求审核者同时检查文字与标签，不能拿“64 组全通过”宣布没有语义剧透。"
+    },
+    {
+      "heading": "接到 Cocos / Web：进度事件更新，展示前重选",
+      "body": "下面是接入步骤，尚未在 Cocos 或真机验收。[Cocos Creator 3.8 LTS 的 JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 说明 JSON 可导入为 JsonAsset，通过 json 属性读取；据此可把批准台词作为制作产物随包导入。\n\n1. 构建时只纳入批准台词，附 storyRevision、语言、稳定 ID 与条件。加载时校验，与当前剧情版本不匹配则停用该批内容。草稿、整份生成对话和模型密钥不进入玩家包。\n2. 由“读完海图”“完成调查”“告知守塔人”等权威任务事件分别更新玩家与角色知识。不能因为模型返回了一句台词，就自动认为玩家已完成调查。\n3. 在允许闲聊的状态触发选择，例如角色空闲且没有任务对白。若等待语音或界面资源，真正展示前重新取当前状态；切场景、读档或换语言后清掉待播候选。\n4. 确认台词实际展示后才更新 lastId；任务揭示对白走专门流程，在约定的确认节点写进度。不要让普通闲聊承担第一次披露秘密。\n5. 录制“发现前、发现后、告知前、告知后、读旧存档”五种回放，核对实际文本和存档标记。字幕、配音和翻译版本都要对应同一条批准台词。\n\n小游戏与移动 H5 可先用短文字气泡，避免把配音制作塞进首个原型；原生移动端及 PC/主机能复用知识表和回放用例，再适配自身叙事工具、存档与输入。本文没有测量各平台性能。若世界事实会反转，另加当前有效性条件并重审台词；“曾经知道”不能直接等同于“现在仍成立”。"
+    },
+    {
+      "heading": "验收与成本：计批准文本，也计错误沉默",
+      "body": "| 维度 | 记录方法 |\n| --- | --- |\n| 越界发言 | 人工标注的禁说状态中出现不允许内容的次数；按玩家未解锁、角色不知情分别统计 |\n| 漏说与沉默 | 应有合格台词的触发中，没有任何合格台词的次数；避免靠始终沉默获得好成绩 |\n| 语义与角色 | 逐句检查事实标签、隐含剧透、人设、承诺及同义重复；保留原候选与修订 |\n| 状态集成 | 读档、切场景、进度回退、换语言后，实际展示是否符合当前状态 |\n| 制作投入 | 生成等待、用量费用、审核与返工时间 / 最终批准句数；与人工起草对照 |\n\n本方案 AI 运行在制作期：可用已批准的云端文本入口或开发机本地模型，首轮一次请求三句即可。记录请求延迟、真实账单或本地计算投入，以及人工修改时间，不预设节省比例。缓存键包含事实包、角色语气、提示词、模型、语言与剧情版本；事实或版本改变后，旧批准不能直接沿用。服务不可用就人工起草或保留已批准目录。\n\n玩家运行时只有端侧选句与显示，没有逐玩家模型请求或推理费用；仍需测目录加载、选择耗时、内存及实际帧影响，不把“无云调用”写成“零成本”。按事件触发，先限制一个闲聊展示槽；预算超限或数据不匹配时保持安静或使用已审核的中性问候。静态包中的未解锁文本仍可被解包读取，这套规则控制叙事顺序，不提供秘密数据保护。\n\n本次未下载、生成或采用第三方美术、配音、模型权重，也没有使用 Ghostwriter。若正式采用外部生成服务或素材，须按具体服务、版本和输入权利核对商用及分发条件；公开介绍不构成工具授权。当前交付是实用制作方法与规则实验；运行时自由对话、自动判断剧透语义属于另需评估的实验方案，本期没有相关效果数据。"
+    },
+    {
+      "heading": "25 分钟练习：交付一份台词和知情状态对照表",
+      "body": "1. 4 分钟：为一个 NPC 写三个原子事实，分别标角色与玩家是否知道；指定哪一句属于任务揭示，移出环境闲聊目录。\n2. 5 分钟：用提示词起草三句，或手写并注明。逐句圈出明说和暗示的事实，只有审核完成才标批准。\n3. 6 分钟：运行代码，对照五个输出；故意把秘密句错标为 storm，观察规则为什么放行，再撤回批准并重验。\n4. 7 分钟：已有工程就用 JsonAsset 接一处文字气泡，测试读海图前后与读档；没有工程就保存状态快照回放，把引擎部分标为待测。\n5. 3 分钟：交付台词目录、知识表、一次错误标注反例、实际耗时和未测项。验收者应能回答“这句为什么此刻可以说”。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Ubisoft：Ghostwriter 内部工具的对白起草流程（2023-03-21 历史案例；2026-11-03 核验）",
+      "url": "https://news.ubisoft.com/en-us/article/7Cm07zbBGy4Xml6WgYi25d/the-convergence-of-ai-and-creativity-introducing-ghostwriter"
+    },
+    {
+      "title": "Yarn Spinner：Storylets and Saliency Primer（滚动文档，2026-11-03 快照；未锁定或运行其软件包）",
+      "url": "https://docs.yarnspinner.dev/write-yarn-scripts/advanced-scripting/storylets-and-saliency-a-primer"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-03 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
