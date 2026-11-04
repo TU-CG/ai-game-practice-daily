@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-04",
+  "tags": [
+    "gameplay",
+    "assets",
+    "frontier"
+  ],
+  "title": "神经动作匹配上场前：先让米和厘米选出同一步伐",
+  "summary": "同一批跑步动作，只把脚位从米改成厘米，检索结果却变了。借 Learned Motion Matching 公开研究，拆清普通搜索与神经网络的分工，用实跑反例校准特征尺度，再规划 Cocos/Web 的动画接入、端侧预算与降级。附代码、审阅提示词和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用基线 + 研究接入方案",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与移动端 3D 角色；PC/主机可迁移评估流程；Node.js 22.16.0 实验",
+  "sections": [
+    {
+      "heading": "场景：摇杆推到底，角色为什么还挑中了慢走",
+      "body": "一款第三人称探索游戏，希望角色从慢走、跑步和转身素材里选出贴合当前操作的动作。团队准备引入神经动作匹配，却发现基础检索就不稳定：把导出脚位从米换成厘米，仍是同一姿势与速度，第一名却从跑步变成慢走。\n\n**先确定“什么算匹配”，再让网络学习这套行为。** 普通 Motion Matching 按当前姿态和期望运动检索已有动画片段，本身不要求机器学习。Learned Motion Matching 则学习替代其中的查询、时间推进和姿态重建步骤；它不是让聊天模型逐帧写动作，也不是靠奖励训练 NPC 决策。\n\n状态机或行为树继续决定“移动、攻击、受击”等行为范围；检索或学习模型在合适范围内提供姿态候选。程序化 IK、脚部约束和过渡处理负责后续修整。本文的角色、两维特征和代码是原创教学示例，只实际运行检索实验；没有训练神经网络、播放动作或测量设备帧率。"
+    },
+    {
+      "heading": "公开研究：三个网络分别替换哪一步",
+      "body": "[Ubisoft 在 2020-07-30 介绍 Learned Motion Matching](https://www.ubisoft.com/en-us/studio/laforge/news/6xXL85Q3bF2vEj76xmnmIu/introducing-learned-motion-matching)，目标是缓解动作库与匹配数据不断扩大带来的内存压力。这是历史研究案例，今天借它建立接入判断，不当作新品消息。\n\n| 部件 | 研究中的工作 |\n| --- | --- |\n| Projector | 从控制查询预测匹配特征与额外特征，近似替代搜索及查表 |\n| Stepper | 根据当前组合特征预测下一时刻，承担短期时间推进 |\n| Decompressor | 从组合特征重建完整姿态 |\n\n研究还使用学出的额外特征补足姿态信息；只给几项手选特征不一定能重建全身。省去大动作库常驻内存是它的动机，但本期没有复现作者的压缩或画质结果，也不能据此承诺手机收益。\n\n[原作者示例 README](https://raw.githubusercontent.com/orangeduck/Motion-Matching/master/README.md) 提供普通与学习式匹配实现，并说明示例与论文并非处处相同。训练顺序是先 Decompressor，再训练 Stepper 和 Projector；更改匹配权重后，需要重新生成匹配数据并重训。这里核验的是 master 于 2026-11-04 的快照，不是 Cocos 插件或本期实装版本。"
+    },
+    {
+      "heading": "先写特征合同：单位、坐标系与尺度一起固定",
+      "body": "练习只看单脚支撑阶段，保留两个特征：候选帧的根节点前向速度，以及左脚相对角色根节点、沿角色前向的位置。查询用期望速度和当前左脚位置；支撑脚 L/R 作为本例的硬筛选。它省略了转向、脚速、未来轨迹、双脚支撑和腾空，不能独立承担完整运动匹配。\n\n| 项目 | 查询 | 慢走 slow | 跑步 run | 本例尺度 |\n| --- | --- | --- | --- | --- |\n| 前向速度（米/秒） | 3 | 1 | 3 | 1 米/秒 |\n| 左脚前向位置（米） | 0.10 | 0.10 | 0.20 | 0.20 米 |\n| 支撑脚 | L | L | L | 先筛选，不混进距离 |\n\n距离按各列的“差值 ÷ 尺度”平方后相加。速度差 1 米/秒与脚位差 0.20 米，在这份教学偏好下贡献相同；这不是通用容忍阈值，也不表示 20 厘米错位可以直接播放。把脚位转成厘米，脚位尺度也必须转成 20。\n\n[原作者 normalize_feature 源码](https://raw.githubusercontent.com/orangeduck/Motion-Matching/master/database.h) 会计算特征均值、按组统计尺度并结合权重，再变换数据。本文用手定的两列尺度便于手算，不复制其整套归一化算法。若使用数据统计量，应从固定的制作数据计算并冻结，查询和候选共用同一版本，不能每帧根据眼前候选重新缩放。\n\n实际采样还要固定骨架、根坐标系、轴方向、时间步长与动作版本；世界坐标中的脚位不能直接与角色局部坐标比较。先排除骨架、行为或状态不兼容的候选，再排名；更多特征只是更长的合同，不会自动补齐缺失动作。"
+    },
+    {
+      "heading": "可复制实验：只换单位，观察第一名是否改变",
+      "body": "保存为 motion-rank.mjs，用 node motion-rank.mjs 运行。features 的顺序固定为 [速度, 脚位]；返回新排序记录，不修改输入。同分按 ID 排序，没有同支撑脚候选就返回空数组。另放一个数值完全匹配、但支撑脚不符的 other-foot，确认硬条件先于距离。\n\n```javascript\n/**\n * @file Compare a small motion-feature catalog with explicit feature scales.\n * @author liliwei\n * @date 2026-11-04\n * @LastEditors liliwei\n * @LastEditTime 2026-11-04\n */\n\n/**\n * Rank compatible frames; this is ordinary search, not a neural model.\n * @param {{features:number[], contact:string}} query [speed, local foot position].\n * @param {Array<{id:string, features:number[], contact:string}>} frames Fixed catalog.\n * @param {number[]} scale Positive scales in the same units as the two features.\n * @returns {Array<{id:string, cost:number}>} Ascending cost; ties use the id.\n */\nexport function rankFrames(query, frames, scale) {\n  const pair = v => Array.isArray(v) && v.length === 2 && [...v].every(Number.isFinite);\n  const valid = v => v && pair(v.features) && ['L', 'R'].includes(v.contact);\n  if (!valid(query) || !pair(scale) || scale.some(v => v <= 0) || !Array.isArray(frames)) {\n    throw new TypeError('Invalid query, scales or catalog');\n  }\n  const ids = new Set(), result = [];\n  for (const frame of frames) {\n    if (!valid(frame) || typeof frame.id !== 'string' || !frame.id.trim() || ids.has(frame.id)) {\n      throw new TypeError('Invalid or duplicate frame');\n    }\n    ids.add(frame.id);\n    if (frame.contact !== query.contact) continue;\n    const cost = frame.features.reduce((sum, v, j) => sum + ((v - query.features[j]) / scale[j]) ** 2, 0);\n    if (!Number.isFinite(cost)) throw new RangeError('Feature cost overflow');\n    result.push({id: frame.id, cost});\n  }\n  return result.sort((a, b) => a.cost - b.cost || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));\n}\n\nconst query = {features: [3, 0.10], contact: 'L'};\nconst frames = [\n  {id: 'slow', features: [1, 0.10], contact: 'L'},\n  {id: 'run', features: [3, 0.20], contact: 'L'},\n  {id: 'other-foot', features: [3, 0.10], contact: 'R'},\n];\n/** Convert only the position column from metres to centimetres. @returns {object} New row. */\nconst toCm = row => ({...row, features: [row.features[0], row.features[1] * 100]});\nconsole.log(JSON.stringify({\n  rawMetres: rankFrames(query, frames, [1, 1]),\n  rawCentimetres: rankFrames(toCm(query), frames.map(toCm), [1, 1]),\n  scaledMetres: rankFrames(query, frames, [1, 0.20]),\n  scaledCentimetres: rankFrames(toCm(query), frames.map(toCm), [1, 20]),\n}, null, 2));\n```\n\nraw 两档都把数字直接相加，故意没有维护物理尺度；scaled 两档才同时转换数据与尺度。函数只判断数值与 L/R 合同，不知道姿态是否自然。除法或平方溢出时拒绝本次查询，调用方应走备用动画。\n\n可以把实际特征表交给已有编程助手审阅。它的工作是帮助找合同漏洞，不能代替动作观察：\n\n```text\n请审阅这份动作检索特征表和 rankFrames：\n1. 列出每列单位、坐标系、采样时刻、尺度及兼容性条件。\n2. 给出一组只换单位就改变未校准排名的反例，并手算贡献。\n3. 检查数据与尺度一起换单位后，排名为什么应保持不变。\n4. 提出一个“距离最小但不能播放”的反例及需要的独立验收。\n不补造模型、动作画面或帧率结果，不修改原有动作许可。\n```"
+    },
+    {
+      "heading": "本次实跑：校准保持单位一致，不保证动作好看",
+      "body": "正文代码在 Node.js 22.16.0 实际运行，得到下表。0.01 为四舍五入显示；JavaScript 原始浮点输出约为 0.010000000000000002。\n\n| 比较方式 | slow 代价 | run 代价 | 第一名 |\n| --- | --- | --- | --- |\n| 米，直接相加 | 4 | 0.01 | run |\n| 厘米，直接相加 | 4 | 100 | slow |\n| 米，尺度 [1, 0.20] | 4 | 0.25 | run |\n| 厘米，尺度 [1, 20] | 4 | 0.25 | run |\n\n另对 4 种速度、5 种脚位、2 种支撑脚的 40 个查询，分别做“脚位米→厘米”和“速度米/秒→千米/小时，同时脚位转厘米”两种换算，共 80 次比较。同步换算尺度后，排名一致，代价差小于 1e-9；12 项非法输入或溢出检查通过。还检查了支撑脚筛选、空目录、同分顺序和输入不变。\n\n两个反例同样重要：把脚位尺度收紧到 0.02 米，第一名会变回 slow，这是明确改变匹配偏好；把查询移到远离所有素材的特征位置，函数仍返回相对最近的候选。后者说明“第一名”不等于“可接受”，需要经回放校准的拒绝条件与备用动作。\n\n这些数字只验证原创特征算术，不是神经模型精度、动画自然度或性能收益。即使接触标签相同，切换也可能跳脚、扭腰或穿地；单帧排名没有证明连续播放成立。"
+    },
+    {
+      "heading": "接到 Cocos / Web：先旁路记录，再接管姿态",
+      "body": "[Cocos Creator 3.8 LTS 的 Marionette 文档](https://docs.cocos.com/creator/3.8/manual/en/animation/marionette/index.html) 说明 Animation Controller 通过动画图管理骨骼动画状态。这可作为现有移动、攻击与受击流程的基础；文档本身不代表已内置本文的检索器或学习模型。以下是尚未在引擎执行的接入方案。\n\n1. 保留已经能玩的 idle/walk/run 动画图。先仅记录查询、候选 ID、各列代价与选中理由，画面仍由现有动画驱动。用同一段摇杆输入回放，观察什么时候检索结果与预期不同。\n2. 自有动作入库时保存 clipId、采样时间、骨架和特征版本。接入端从当前姿态取局部脚位，从移动控制器取目标运动；不能从候选本身反推“正确查询”。\n3. 确认候选可用后，再做按采样时间进入片段、过渡、接触处理与切换节奏。片段起点、归一化时间和实际秒数要明确换算；短脚本没有实现这些接口，不能每帧调用一次播放并不断重置动画。\n4. 约定根位移由角色控制器还是动画负责，避免双重推进。攻击、受击和腾空等状态转回各自流程；无候选时继续已审核的动画路线。\n5. 基线通过回放后，才用自有且获准训练的数据探索神经替代。固定特征与模型版本，先旁路比较姿态重建、转向响应和连续运动，再决定是否让模型驱动画面。\n\n小游戏和移动 H5 若只有少量移动片段，现有混合与状态机往往已足以构成实用基线；先测是否真的存在库规模问题。PC/主机的大动作库可以迁移同样的特征合同和验收记录，再评估原生推理接入。2D 序列帧也能借鉴单位与尺度检查，但不能直接套用这里的骨骼姿态网络。"
+    },
+    {
+      "heading": "采用前量清质量、端侧成本与素材条件",
+      "body": "| 维度 | 在同一输入回放中记录 |\n| --- | --- |\n| 控制响应 | 目标与实际根速度/朝向误差，起停和反向的响应时间 |\n| 动作连续 | 过渡前后关节突变量、单次回放切换次数、支撑期脚在世界空间的滑动距离 |\n| 内容覆盖 | 急停、慢转、反向和动作边界的拒绝/降级次数；人工复查穿插和失衡 |\n| 运行成本 | 冷启动与稳态分开；查询、推理、姿态写入及 IK 各段 P50/P95，峰值内存、下载体积 |\n\n传统基线、神经候选和最终显示结果要分别记录，误差阈值由目标角色与玩法确定。训练与验收按动作片段和回放路线隔开，别把同一片段的相邻帧当成全新泛化证据。本文的线性检索随候选数和特征数增长；神经方案也有网络计算及临时张量，不能把权重大小当成全部内存。\n\n若继续实施，建议离线训练、玩家端本地推理，不让逐帧姿态等待云端请求。延迟需计入完整帧预算；30 FPS 一帧约 33.3ms，其中留给动画多少应由实际场景分配。按同一设备分别测 1、10、30 个活动角色，并观察与渲染争用；这些是待测档位，没有本期性能结论。\n\n这条端侧路线没有逐玩家推理 API 费，但要记训练计算、内容制作、分发流量和设备耗电。缓存模型及预处理数据时带上骨架、动作库、特征尺度和模型版本；每个角色的时间推进状态单独维护，不能只凭相同目标速度共享姿态。加载失败、版本不符、非有限输出或超预算时，平滑转回已审核的普通动画；离线也应能继续玩。\n\n素材条件影响能否采用：[示例 README](https://raw.githubusercontent.com/orangeduck/Motion-Matching/master/README.md) 将代码的 MIT 许可与动作数据的 CC BY-NC-ND 4.0 分开列出。代码许可不能替示例动作、数据衍生产物或权重授予商用许可。正式项目优先使用自有或另行获准训练、改作与发行的动作，并逐项核对所需权利。本期只使用原创数字，没有下载或分发动作素材、模型权重。\n\n当前可直接复用的是特征合同、单位不变检查与对照回放方法；完整神经动画控制器属于待验证接入方案。公开研究提供方向，是否节省资源且保持动作质量，仍要由目标平台的测量回答。"
+    },
+    {
+      "heading": "25 分钟练习：留下一个单位反例和一份接入记录",
+      "body": "1. 4 分钟：挑一个自有角色的移动场景，写清谁控制位移、哪些行为可参与匹配；没有工程就使用本文三条候选。\n2. 5 分钟：运行代码，手算四行代价，确认只换单位会影响 raw，而同步换尺度不会影响 scaled。\n3. 6 分钟：收紧脚位尺度、移远查询、删除同支撑脚候选。保存三个输出，解释“偏好变了”“库不覆盖”“没有兼容项”的区别。可用提示词辅助审阅。\n4. 7 分钟：已有 Cocos/Web 工程时只加旁路日志，回放起步与急停，核对查询的单位和局部坐标；没有工程就交付字段表及回放清单，把动画播放与模型训练标为待测。\n5. 3 分钟：保存输入、尺度版本、实际输出、素材来源与未测项。下一步先修清楚特征或覆盖问题，再决定是否值得训练。\n\n完成物是一份可重复的匹配记录。本练习不要求在 25 分钟内安装研究环境或训练模型；判断动作是否适合进入游戏，必须补上连续播放和目标设备证据。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Ubisoft La Forge：Introducing Learned Motion Matching（2020-07-30 历史研究介绍；2026-11-04 核验）",
+      "url": "https://www.ubisoft.com/en-us/studio/laforge/news/6xXL85Q3bF2vEj76xmnmIu/introducing-learned-motion-matching"
+    },
+    {
+      "title": "原作者 Motion-Matching README：示例、训练顺序与代码/数据许可区别（master，2026-11-04 快照）",
+      "url": "https://raw.githubusercontent.com/orangeduck/Motion-Matching/master/README.md"
+    },
+    {
+      "title": "原作者 database.h：normalize_feature 与特征尺度（master，2026-11-04 快照）",
+      "url": "https://raw.githubusercontent.com/orangeduck/Motion-Matching/master/database.h"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Marionette 动画系统与 Animation Controller",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/animation/marionette/index.html"
+    }
+  ]
+}
