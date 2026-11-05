@@ -58,6 +58,17 @@
   ],
   "reports": [
     {
+      "date": "2026-11-05",
+      "file": "2026-11-05.json",
+      "tags": [
+        "operations",
+        "development",
+        "testing"
+      ],
+      "title": "让 AI 分析线上报错：先把调用栈还原到正确构建",
+      "summary": "背包报错，AI 却建议修改商店：问题可能出在交给它的源码版本。用两份 Source Map 实跑错配反例，建立构建、栈帧与证据包的对应关系，再让助手提出可验证假设。附 Sentry Seer 工具案例、Cocos/Web 接入与 25 分钟练习。"
+    },
+    {
       "date": "2026-11-04",
       "file": "2026-11-04.json",
       "tags": [

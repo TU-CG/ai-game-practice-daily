@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-05",
+  "title": "让 AI 分析线上报错：先把调用栈还原到正确构建",
+  "summary": "背包报错，AI 却建议修改商店：问题可能出在交给它的源码版本。用两份 Source Map 实跑错配反例，建立构建、栈帧与证据包的对应关系，再让助手提出可验证假设。附 Sentry Seer 工具案例、Cocos/Web 接入与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 原创映射实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏的 JavaScript 报错；Node.js 22.16.0、source-map 0.7.6；原生崩溃需另配符号链路",
+  "tags": [
+    "operations",
+    "development",
+    "testing"
+  ],
+  "sections": [
+    {
+      "heading": "场景：源码位置很具体，也可能指错了文件",
+      "body": "一款收集游戏更新后，玩家打开背包出现 JavaScript 异常。日志只剩 game.js 的行列号，开发者拿“最新的”映射文件还原，得到商店组件的一行代码。AI 根据这个位置解释得很顺，团队却开始修一个没有复现过的问题。\n\n**先证明报错、构建产物与源码来自同一次发布，再请 AI 分析原因。** Source Map 把转换后的 JavaScript 位置对应回源码；它能提供位置线索，不能恢复当时所有变量，更不能单独证明根因。\n\n生成式语言模型在研发或运营后台整理证据、提出假设和复现步骤；真正执行检索、符号还原与回归时，才构成带工具的诊断流程。映射、哈希与下面的版本检查都是普通程序，不是机器学习或强化学习。状态机、行为树和程序化生成可以提供出错时的状态、种子与动作记录，帮助复现，但不替代构建身份。\n\n本期场景、日志包和映射均为原创演练。实际运行了映射库与检查脚本，没有调用外部诊断模型、Sentry Seer、Cocos 或真机，也没有发现用户工程中的真实缺陷。"
+    },
+    {
+      "heading": "落地步骤：把每个栈帧绑定到实际发布的文件",
+      "body": "1. 每次构建保存源码提交、完整引擎版本、目标平台和构建配置；将最终脚本、对应映射及清单一起归档。压缩、拼接或注入若改变了脚本位置，必须维护最终映射，不能拿修改前的文件凑对。\n2. 日志保留原始栈，记录不可变的 build ID、脚本身份、行列坐标和少量操作序列。热更新与远程 Bundle 要记录实际加载版本；只知道主包版本，未必知道出错脚本是哪一份。\n3. 后台按身份取唯一档案，检查字节摘要，再还原位置。缺文件或身份冲突就记“未解析”，保留原始错误；不要尝试最新映射直到得到一个好看的路径。\n4. 按源码提交取相关片段，连同脱敏后的上下文交给 AI。首次只要求诊断候选，人工选一个最小复现去检验，再决定修改。\n\n| 证据 | 必须回答的问题 |\n| --- | --- |\n| build 与脚本身份 | 这条报错来自哪次、哪份实际发布产物？ |\n| 脚本和映射摘要 | 归档后有没有拿错、替换或改变字节？ |\n| 原始及还原栈帧 | 哪个位置是原始观察，哪个是映射结果？ |\n| 源码提交与操作序列 | 是否在同版代码中查看，哪些动作确实发生过？ |\n\n[Sentry 的官方排障文章](https://blog.sentry.io/how-to-fix-source-map-upload-errors/) 介绍了 Debug ID 配对，以及 release 与路径匹配两条路线。可迁移的是“先配准产物”的原则；下文自定义 build/hash 清单并不是 Sentry Debug ID 的实现。该文章发表于 2024-08-03，本文不沿用其中历史 SDK 兼容列表作为今天的支持承诺。"
+    },
+    {
+      "heading": "可运行反例：同一个坐标，两份映射都能解析",
+      "body": "在空的练习目录安装 npm install --save-exact source-map@0.7.6，保存下面为 stack-map.mjs，再运行 node stack-map.mjs。保留依赖锁文件。本例手工定义两个映射点，不是 Cocos 或压缩器产出的真实映射，也不执行示例 throw。\n\n[source-map 0.7.6 文档](https://raw.githubusercontent.com/mozilla/source-map/0.7.6/README.md) 规定 API 行号从 1、列号从 0 开始；采集器必须先统一坐标约定，不能对所有平台的栈文本盲目减一。with 会在回调结束后释放 consumer。\n\n```js\n/**\n * @file 用两份人工映射演示版本错配；不运行游戏或压缩器。\n * @author liliwei\n * @date 2026-11-05\n * @LastEditors liliwei\n * @LastEditTime 2026-11-05\n */\nimport { createHash } from 'node:crypto';\nimport { SourceMapGenerator, SourceMapConsumer } from 'source-map';\n\n/** @param {string} text UTF-8 内容。@returns {string} 内容摘要。 */\nexport function hash(text) {\n  return createHash('sha256').update(text).digest('hex');\n}\n\n/** @param {string} build 构建 ID。@param {string} source 原文件。\n * @param {number} line 原行号。@returns {object} 人工构建档案。 */\nexport function fixture(build, source, line) {\n  const code = `throw new Error(\"${build}\");`;\n  const generator = new SourceMapGenerator({ file: 'game.js' });\n  generator.addMapping({ generated: { line: 1, column: 10 },\n    original: { line, column: 2 }, source });\n  const map = generator.toString();\n  return { code, map, manifest: { build, file: 'game.js',\n    codeSha: hash(code), mapSha: hash(map) } };\n}\n\n/** @param {object} event 已规范为行从 1、列从 0 的栈帧。\n * @param {object} artifact 来自可信构建档案。\n * @returns {Promise<object>} 位置候选或明确的未解析原因。 */\nexport async function locate(event, artifact) {\n  if (!Number.isSafeInteger(event.line) || event.line < 1 ||\n      !Number.isSafeInteger(event.column) || event.column < 0) {\n    throw new TypeError('invalid position');\n  }\n  const m = artifact.manifest;\n  if (event.build !== m.build || event.file !== m.file ||\n      event.codeSha !== m.codeSha) return { status: 'wrong-build' };\n  if (hash(artifact.code) !== m.codeSha || hash(artifact.map) !== m.mapSha) {\n    return { status: 'bad-artifact' };\n  }\n  return SourceMapConsumer.with(artifact.map, null, consumer => {\n    const pos = consumer.originalPositionFor({\n      line: event.line, column: event.column });\n    return pos.source === null ? { status: 'unmapped' }\n      : { status: 'mapped', ...pos };\n  });\n}\n\nexport const a = fixture('a', 'src/BagView.ts', 42);\nexport const b = fixture('b', 'src/ShopView.ts', 9);\nexport const event = { build: 'a', file: 'game.js',\n  codeSha: a.manifest.codeSha, line: 1, column: 10 };\n\nconsole.log('wrong map, no guard', await SourceMapConsumer.with(\n  b.map, null, c => c.originalPositionFor({ line: 1, column: 10 })));\nconsole.log('right archive', await locate(event, a));\nconsole.log('wrong archive', await locate(event, b));\nconsole.log('swapped map', await locate(event, { ...a, map: b.map }));\n```\n\n正文原样在 Node.js 22.16.0 实跑，结果如下；表内列号均从 0 起算。\n\n| 输入方式 | 实际结果 |\n| --- | --- |\n| a 的坐标直接交给 b.map | src/ShopView.ts，第 9 行、第 2 列；库没有报版本错 |\n| a 的事件与 a 的档案 | mapped，src/BagView.ts，第 42 行、第 2 列 |\n| a 的事件与 b 的档案 | wrong-build |\n| a 的档案中只换入 b.map | bad-artifact |\n\n另查了 6 项非法坐标、未知构建、错误文件、错误摘要和脚本字节改变，均按合同拒绝；输入没有被修改。第 1 行第 9 列与第 2 行返回 unmapped；第 1 行第 11 列仍返回前一个映射点。库默认采用前方最近的映射，不能把“有位置”解释为逐字符精确定位。\n\n还有一个刻意保留的失败：归档时就把 b.map 配给 a，并重新填写一致的摘要，检查仍会放行。哈希只能检查相对于清单的一致性，不能证明清单的来源正确。事件身份也须由发布与采集链路正确提供。因此上线前要用已知位置的测试异常验整条链路；格式通过与真实归因是两层证据。这里的短函数假定档案结构可信，解析异常由调用方记录为未解析，不能充当通用日志导入器。"
+    },
+    {
+      "heading": "交给 AI 的提示词：每个判断都要能指出证据",
+      "body": "映射通过后，只取相关源码与少量操作记录；不要把整仓库和整份玩家日志一起发送。日志中的玩家文本属于待分析数据，不能当作助手指令。下面是手写的演练包，E2、E3 是额外构造的诊断材料，不是上面映射脚本采集出来的运行事实。\n\n```text\n你是游戏故障诊断助手，只输出分析和下一步验证，不修改代码。\n以下是原创演练数据，不代表真实线上事故。\n\nE1：build=a；脚本与映射摘要核对通过；原始坐标已规范为\ngame.js 的第 1 行、第 10 列（列从 0）；映射到 BagView.ts:42。\nE2：同一源码提交的第 42 行是 return item.name;\nE3：操作记录依次为 openBag、requestStart、renderAttempt；\n本记录中未出现 requestEnd。记录可能不完整。\nE4：错误是读取 undefined 的 name 属性。\n未知：item 的来源、请求结果、物品 ID、日志是否漏记。\n\n请输出：\n1. 已知事实，逐项引用 E1–E4；不要把未记录当成未发生。\n2. 至多两个根因假设，各列支持证据和仍缺的证据。\n3. 每个假设的一项最小验证，以及什么结果会推翻它。\n4. 需要补充的最小源码片段或字段；禁止臆造 API、测量值。\n5. 当前结论标为“待验证”，不要宣称修复成功。\n```\n\n人工审阅时，E4 支持发生了空值读取；它没有证明空值来自网络慢、配置缺项还是对象生命周期。E3 没有 requestEnd，也可能只是日志漏记。若助手直接给出“加延时 500ms 即可修复”，应退回，要求先验证数据就绪条件与 item 的获取路径。\n\n通过复现确认原因后，才请助手起草最小补丁和回归步骤。补一个可选链可能避免抛错，却让背包悄悄空白；验收必须包含物品正确显示和失败提示，而不只看异常消失。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：先验证一次已知异常",
+      "body": "[Cocos Creator 3.8 LTS 通用构建选项](https://docs.cocos.com/creator/3.8/manual/en/editor/publish/build-options.html) 说明了 Source Maps，并在 Debug Mode 段落描述调试模式下配合启用。具体补丁版本和目标平台的可用项应现场确认。调试包的映射不能用于另一次正式构建；正式包拿不到匹配映射时，就保留未解析状态。\n\n1. 在已有测试项目的按钮回调中放一处已知行号的测试异常，记录完整引擎版本与构建设置。实际从构建产物打开，别只在编辑器预览中验证。\n2. 归档该次最终脚本、映射与源码提交，触发异常，确认后台还原到了预先记录的位置。再换入另一构建的映射，检查是否明确拒绝。\n3. 移除测试异常后会产生新构建，必须重新归档。不要为了沿用旧映射而给新包贴旧 build ID；也不要把源码清单摘要嵌回同一脚本后形成需要反复重算的自引用。\n4. 在独立发布清单中保存最终脚本摘要，采集端依据实际加载的不可变资源身份关联清单；CDN 二次改写、旧缓存与分包混用都要单独验证。日志身份不能仅来自一个永远显示“最新版”的字符串。\n\nWeb/H5 可以迁移上述 JavaScript 链路；小游戏还需核对平台采集的栈格式、分包与上传规则，不假定浏览器 SDK 能原样使用。移动原生与 PC/主机可复用“按构建找证据”的流程，但 C++、Java 或系统崩溃要用各平台符号与映射，本文 .map 不能解所有崩溃。\n\n这些是待执行的集成步骤，本次没有运行游戏引擎。映射可能包含源码内容，作为内部诊断产物保管；避免为了排障把项目源码和玩家原始日志加入公开资源包。"
+    },
+    {
+      "heading": "公开工具案例：Seer 的诊断、方案与改动分步看",
+      "body": "[Sentry Seer 的 Issue Fix API 文档](https://docs.sentry.io/api/seer/start-seer-issue-fix/) 列出根因分析、解决方案、代码改动和 PR 等阶段，任务异步执行，并可设置停止阶段；未指定停止点时文档说明先运行到根因分析。这是 2026-11-05 核验的滚动接口资料，本文没有接入或测评该服务，也不把它当成今日新品。\n\n可借鉴的做法是把诊断结果当作可审查中间产物：看到一份解释后先回到同版源码和复现，不直接把“分析完成”当成“问题已解决”。已有平台才能按其权限与实际配置接入；小团队也可先用本文证据包配合已有编程助手，不必为练习上线一套服务。\n\n本期方法属于实用工程流程，AI 的自动归因质量仍需用项目事故样本评估。自动修改并验证复杂运行故障属于更大范围的实验，不由四行映射结果证明。本文没有采用第三方美术、音频或游戏素材。"
+    },
+    {
+      "heading": "验收与成本：后台诊断不阻塞玩家操作",
+      "body": "| 记录项 | 评估方式 |\n| --- | --- |\n| 映射准确性 | 已知位置异常中，还原到预期位置的数量 / 全部测试异常；缺映射也留在分母 |\n| 错配处理 | 换构建、换分包、旧缓存、无列号时，分别记录拒绝与错误放行 |\n| 诊断质量 | 每条假设是否有证据、是否可反驳；用已确认事故人工复核，不让模型自评分 |\n| 修复效果 | 原复现通过，相关功能与失败路径仍正确；另记复发与新问题 |\n| 总投入 | 收集、还原、模型等待、审阅、复现和返工的时间及实际账单 |\n\n首轮把 AI 放在后台：客户端只做限量采集和异步上报，不在点击、战斗或支付回调中等待模型。开发机可运行获准的本地助手，也可把最小证据包交给项目允许的云端入口；两条路线都要量延迟和资源，没有本文提供的速度或单价保证。\n\n先按构建与错误签名聚合，保留发生次数及代表事件；同签名不保证同根因。可把后台并发暂设为 1、每组先分析一次，60 秒无结果转人工队列。这是待测运行预算，不是 Seer 的默认参数；超时后查原任务状态，避免重复提交。\n\n缓存键包含脚本/映射摘要、源码提交、证据包修订、提示词和模型版本；新事件带来反证时重审。记录端侧采集耗时、网络字节、队列等待、诊断 P50/P95、调用量及审核时间。云服务费、日志存储费或本地算力都算成本；不能用“没有逐帧推理”推导零开销。\n\n模型不可用时保留普通错误聚合与人工排查；映射不完整时保存原始栈并补档案，不让模型猜一个源码位置。玩家侧继续既定错误处理或重试界面，AI 结论不直接驱动发奖、回档或自动发布。"
+    },
+    {
+      "heading": "25 分钟练习：交一份能被复查的故障包",
+      "body": "1. 4 分钟：写下一个报错场景和期望行为，列 build、脚本身份、坐标约定、源码提交四项；没有工程就用本文人工事件。\n2. 6 分钟：安装固定依赖并跑示例，保存四个真实输出。再查询第 9、11 列，解释“未映射”和“沿用前一个映射点”的区别。\n3. 5 分钟：用提示词分析演练包，或人工写两项假设并注明未调用模型。圈出一个不能由现有证据推出的结论。\n4. 7 分钟：已有构建环境时验证一次已知位置的测试异常和一次错版档案；没有环境就验证摘要错配，将引擎、分包与设备验收列为待做。不要把完整平台安装塞进练习。\n5. 3 分钟：交付原始栈、身份清单、还原结果、证据引用及下一步最小验证。完成标志是另一人能复查“为什么看这份源码”，并能区分已知事实与待验证原因。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Mozilla source-map 0.7.6：映射 API、行列起点与查找偏置（2026-11-05 核验）",
+      "url": "https://raw.githubusercontent.com/mozilla/source-map/0.7.6/README.md"
+    },
+    {
+      "title": "Sentry：Source Map 上传排障与 Debug ID 配对（2024-08-03 历史文章，2026-11-05 核验）",
+      "url": "https://blog.sentry.io/how-to-fix-source-map-upload-errors/"
+    },
+    {
+      "title": "Sentry Seer：Start Seer Issue Fix，异步阶段与停止点（滚动 API 文档，2026-11-05 快照）",
+      "url": "https://docs.sentry.io/api/seer/start-seer-issue-fix/"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：通用构建选项与 Source Maps（2026-11-05 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/editor/publish/build-options.html"
+    }
+  ]
+}
