@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-06",
+  "title": "让 AI 批量设计怪物波次：高分之外，还要留下不同节奏",
+  "summary": "十份波次方案都能过规则，选出的前四名却可能属于同一种节奏。借鉴 MAP-Elites 的分格归档，用可运行的简化模拟区分合格、得分与多样性，再用空格指导下一轮 AI 提案。附提示词、pyribs 工具案例、Cocos/Web 接入与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 简化模拟；研究方法借鉴",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏；可迁移到移动及 PC/主机关卡制作。JavaScript 示例实跑于 Node.js 22.16.0，未运行 Cocos 或生成模型。",
+  "tags": [
+    "content",
+    "design",
+    "testing"
+  ],
+  "sections": [
+    {
+      "heading": "场景：候选很多，策划拿到的仍是同一种波次",
+      "body": "一款俯视角生存小游戏需要几种短波次：有的让敌人分散出现，有的让三只同时形成压力；有的开场就忙，有的把投放放在后半段。让语言模型“再来十个”后，如果始终只留下总分最高的几个，资料夹可能越来越大，可供策划比较的节奏却没有增加。\n\n**先判是否合格，再按特征分格，最后只在同一格内比质量。** 这样能同时留下不同方向的代表，策划可以看见缺了哪一种，再要求下一轮补充。\n\n本期生成式模型的工作是制作期提出出生时间表；脚本负责模拟、去重和归档。质量—多样性搜索属于搜索优化方法，不等于语言模型，也不自动属于强化学习。NPC 的状态机或行为树仍执行移动和攻击；程序化关卡生成器也可提供候选。下面只实现分格保存，不包含完整 MAP-Elites 的父代选择、变异与迭代搜索。\n\n波次、提示词与代码是原创教学示例。本文使用手工候选，没有调用生成模型、训练代理或运行真实战斗。"
+    },
+    {
+      "heading": "把合格条件、分类特征和质量目标写成三栏",
+      "body": "练习把观察窗口固定为 0–20 秒，每波恰好六只同种怪物，出生秒数为 0–17 的整数。每只固定存在三秒，在出生时加入，在出生加三秒时移除；这是假设寿命的占用模拟，不是根据玩家攻击结算的战斗。\n\n| 用途 | 本例定义 | 不能代表什么 |\n| --- | --- | --- |\n| 合格条件 | 任一时刻同时在场不超过 3 只 | 不证明玩家能活下来 |\n| 分类横轴 | 前 10 秒出生数：不足 3 / 至少 3 | 不直接等于容易 / 困难 |\n| 分类纵轴 | 同时在场峰值：低于 3 / 恰好 3 | 不反映怪物伤害与走位 |\n| 格内质量分 | 20 − 最后消失时刻与 18 秒的绝对差 | 只奖励接近目标时长，不是好玩度 |\n\n六只的数量固定，因此四个格子是在同一素材预算下比较投放方式。分数与分类边界都在看候选前固定；不能因为某批只填了一格，就临时换刻度宣称覆盖提高。\n\n同秒可以出生多只；但在第 3 秒移除的怪物不与第 3 秒新生的怪物重叠。因为事件都在整数秒，检查 0–19 每个整数时刻足以覆盖本例峰值。若改成小数时间或真实死亡事件，就要重新设计事件扫描与规则版本。"
+    },
+    {
+      "heading": "可复制实验：全局前四名与每格代表有什么不同",
+      "body": "保存下面为 wave-archive.mjs，用 node wave-archive.mjs 运行，无额外依赖。导入候选时先解析 JSON，并限制批量大小、校验数组和对象结构；本例代码继续检查时间与 ID。非法结构抛错，超过在场上限计为 rejected，合格但时间表相同计为 duplicates。相同内容保留最先出现的记录。\n\n```js\n/**\n * @file 用固定寿命的教学波次演示分格归档，不模拟真实战斗。\n * @author liliwei\n * @date 2026-11-06\n * @LastEditors liliwei\n * @LastEditTime 2026-11-06\n */\n\n/**\n * 计算教学波次的时间特征与目标分；怪物在 [出生, 出生+3) 存在。\n * @param {number[]} times 六个 0–17 的整数出生秒数，可同时出生。\n * @returns {object} 排序副本、规则通过标记、特征、分数及格子键。\n */\nexport function measureWave(times) {\n  if (!Array.isArray(times) || times.length !== 6 ||\n      [...times].some(t => !Number.isInteger(t) || t < 0 || t > 17)) {\n    throw new Error('需要六个 0–17 的整数');\n  }\n  const sorted = [...times].sort((a, b) => a - b);\n  const alive = Array.from({ length: 20 }, (_, t) =>\n    sorted.filter(s => s <= t && t < s + 3).length);\n  const early = sorted.filter(t => t < 10).length;\n  const peak = Math.max(...alive), end = sorted[5] + 3;\n  return { times: sorted, valid: peak <= 3, early, peak, end,\n    score: 20 - Math.abs(end - 18),\n    cell: `${early >= 3 ? 1 : 0},${peak >= 3 ? 1 : 0}` };\n}\n\n/**\n * 先按规则与内容去重，再保留每格得分最高者；同分取较小 ASCII ID。\n * @param {{id:string,times:number[]}[]} rows 候选数组，ID 为唯一的大写字母。\n * @returns {object} 合格候选、格子代表及两类剔除计数。\n */\nexport function archiveWaves(rows) {\n  const ids = new Set(), seen = new Set(), cells = new Map();\n  const valid = [];\n  let rejected = 0, duplicates = 0;\n  for (const row of rows) {\n    if (!row || !/^[A-Z]+$/.test(row.id) || ids.has(row.id)) {\n      throw new Error('ID 必须是唯一的大写字母串');\n    }\n    ids.add(row.id);\n    const item = { id: row.id, ...measureWave(row.times) };\n    if (!item.valid) { rejected++; continue; }\n    const key = item.times.join(',');\n    if (seen.has(key)) { duplicates++; continue; }\n    seen.add(key); valid.push(item);\n    const old = cells.get(item.cell);\n    if (!old || item.score > old.score ||\n        (item.score === old.score && item.id < old.id)) cells.set(item.cell, item);\n  }\n  return { valid, elites: [...cells.values()], rejected, duplicates };\n}\n\n// 全部为手工候选；I 是 A 的乱序副本，J 违反同时在场上限。\nexport const samples = [\n  ['A', [0, 3, 6, 10, 12, 15]], ['B', [0, 3, 6, 11, 13, 15]],\n  ['C', [1, 4, 7, 10, 13, 15]], ['D', [2, 5, 8, 11, 14, 15]],\n  ['E', [0, 1, 2, 10, 12, 14]], ['F', [0, 10, 11, 13, 14, 16]],\n  ['G', [0, 10, 11, 12, 15, 17]], ['H', [0, 1, 2, 3, 15, 17]],\n  ['I', [15, 12, 10, 6, 3, 0]], ['J', [0, 0, 0, 0, 15, 16]],\n].map(([id, times]) => ({ id, times }));\nconst result = archiveWaves(samples);\nconst top = [...result.valid].sort((a, b) =>\n  b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)).slice(0, 4);\nconsole.log(JSON.stringify({ rejected: result.rejected, duplicates: result.duplicates,\n  top: top.map(x => x.id), topCells: new Set(top.map(x => x.cell)).size,\n  archive: result.elites.map(x => x.id), archiveCells: result.elites.length }));\nconsole.table(result.elites.map(({ id, early, peak, end, score, cell }) =>\n  ({ id, early, peak, end, score, cell })));\n```\n\n分数只用于同格替换；新类型即使分数较低也能入空格。模型不能自报 early、peak 或 score，它们必须由当前版本的评估器重算。正式导出还应经过策划批准，不能把入格等同于可以上线。"
+    },
+    {
+      "heading": "本次实跑：覆盖四格，不等于四倍的可玩内容",
+      "body": "在 Node.js 22.16.0 实际执行：十份手工候选中，J 的峰值为 4，被规则剔除；I 是 A 打乱顺序的副本，被去重。剩余八份中，全局前四名是 A、B、C、D，均为 20 分，落在同一格；归档留下 A、E、F、G。\n\n| 格子代表 | 前 10 秒出生数 | 在场峰值 | 最后消失秒数 | 质量分 |\n| --- | --- | --- | --- | --- |\n| A：前段至少 3、低峰 | 3 | 2 | 18 | 20 |\n| E：前段至少 3、高峰 | 3 | 3 | 17 | 19 |\n| F：前段不足 3、低峰 | 1 | 2 | 19 | 19 |\n| G：前段不足 3、高峰 | 1 | 3 | 20 | 18 |\n\n同样保留四份方案，格子覆盖分别为 1/4 与 4/4。这个结果只描述事先选定的两条特征轴；A 与 B 虽在同格，时间表仍不同，E 与 G 分属两格，真人也可能觉得很像。不能将覆盖率当成感知差异、通关率或模型提升。\n\n另用独立的“先离场、后出生”事件扫描核对了 1,296 个构造时间表的峰值，并检查秒数边界、同格替换、同分处理、乱序去重与输入不变。结果检验的是本例统计和归档。真实项目应回放玩家或测试代理的轨迹，补测受伤、走位空间与实际结束时间；固定三秒寿命不能代替这些证据。"
+    },
+    {
+      "heading": "下一轮提示词：针对缺的类型提案，保留计算反馈",
+      "body": "先把四格画在纸上：空格表示这批还没找到，不表示这个方向绝对不可能。已有格子的代表可以给模型作参考；不要把所有高分样本都当成必须模仿的模板。下面针对“前段不足 3、高峰”补候选，目标按你实际缺的格子替换。\n\n```text\n你是游戏关卡设计助手。请为同一种怪物提出 4 个出生时间表，只输出 JSON 数组。\n每项只有 id（唯一的大写字母串）与 times（恰好 6 个整数，范围 0–17 秒）。\n教学规则：每只怪物在 [出生秒, 出生秒+3) 存在；同一时刻最多 3 只。\n目标格：前 10 秒出生不足 3 只，同时在场峰值恰为 3；希望最后一只在 18 秒附近消失。\n不要改怪物数量、寿命或时间范围；不要输出分数、通过标记或“已验证”。\n这批结果只是待算候选；同秒出生允许，换 ID 或打乱数组不算新方案。\n已有时间表：[0,10,11,12,15,17]。请提出不同时间表，不承诺真实可玩性。\n```\n\n收到候选后跑同一评估器，只反馈事实，例如“前段出生 2，只形成峰值 2，所以未进目标格”，不要仅说“不够刺激”。保留原始回复、模型标识、提示词、时间表和评估器版本。一次小批量、最多两轮修订可作为练习预算；超预算就停止，留下空格与失败原因。\n\n公平比较时，对生成模型、规则随机生成器与人工草案使用相同候选数量和审核口径；需要计费的方案还要比较相同时间或费用预算。模型生成十份却只展示最好一份，无法说明整条流程有收益。"
+    },
+    {
+      "heading": "公开方法与工具：借分格竞争，保留自己的验收标准",
+      "body": "[MAP-Elites 原始论文 v1](https://arxiv.org/abs/1504.04909) 于 2015-04-20 提出在用户选择的特征空间中保存各处的高质量解，帮助观察性能与不同特征的关系。本期借用“每格保存代表”的思想，不报告复现论文效果。\n\n[PCG-QD 论文的作者公开全文](https://antoniosliapis.com.institutedigitalgames.com/articles/pcgqd.php) 讨论了游戏内容的可用性、质量和多样性，并介绍弹幕脚本等应用：可以用搜索代理检查玩法约束，再按不同特征保留内容。该历史研究支持方法背景，不能证明本文的波次对真人有趣。\n\n需要扩大实验时，可考察 [pyribs GridArchive 文档](https://docs.pyribs.org/en/stable/api/ribs.archives.GridArchive.html)。本次页面标为 stable v0.12.0；它将 solution、objective 与 measures 分开接收，并在默认阈值配置下进行格内优胜替换。候选如何生成、是否可玩仍由项目提供，归档库不会替你补上游戏模拟器。\n\n以上为既有研究与工具资料，均于 2026-11-06 联网核验，不是今日发布新闻。本文未安装 pyribs，也不声称这段 JavaScript 完整复刻它的行为。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：先离线挑选，运行时播放批准波次",
+      "body": "以下为接入方案，尚未在引擎或真机执行。[Cocos Creator 3.8 LTS JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 支持把 JSON 导入为 JsonAsset，再通过 json 读取内容；可用它装载已经批准的时间表。\n\n1. 制作侧记录 waveId、rulesVersion、出生表、评估结果与审核状态。模型原始回复不直接进入游戏，正式包只带批准方案。\n2. 第一轮用六个标记复现“固定三秒寿命”，以局内有效时间消费排序事件，每条只执行一次；暂停不推进，重开重置游标。帧间跨过多个事件时按事件时间顺序补处理，避免跳帧丢事件。\n3. 接真实怪物后，用实际存活事件重算峰值和结束时间。玩家击杀速度会改变归档位置；旧模拟标签只能作制作参考，不能假设仍准确。\n4. 用同一输入回放比较四个代表，记录掉帧、受伤与玩家描述。小游戏和移动端另量化对象池、同屏单位及特效负载；PC/主机也要检查 AI 更新和碰撞成本。不能把“最多三只”当作跨平台性能保证。\n\n首版把模型放在开发机或已批准的云端制作流程：记录生成、排队、审核和返工时间，以及真实用量费用，先单批处理再测是否增加并发。缓存键包含规则、模型与提示词版本，候选内容也要留档；改规则后重算，不复用旧通过标记。模型失败就回退人工或已有批准波次。\n\n运行时端侧只加载数据和执行普通规则，没有逐波模型请求、云端并发或推理等待；仍需测加载与调度成本。本文未采用第三方美术、音频或模型权重，新增素材另按实际来源核对使用条件。"
+    },
+    {
+      "heading": "25 分钟练习：交一张类型表，而不是只交候选数量",
+      "body": "1. 4 分钟：写一条合格条件、两条分类轴和一个格内目标；解释为什么它们不等价于好玩。没有工程就采用本文规则。\n2. 6 分钟：运行代码，手算 A 与 G 的峰值和分数；把第 3 秒离场与出生的边界单独回放，保留真实输出。\n3. 5 分钟：用提示词向已有模型要四份候选，或手写并注明。统计结构错误、规则失败、重复和新填格，失败不能从投入中删掉。\n4. 7 分钟：已有 Cocos/Web 项目就播放两个代表并检查暂停重开；没有工程就画出生—离场时间线。已有试玩者才记录体验差异，否则写明真人验收待做。\n5. 3 分钟：保存规则版本、原始候选、四格代表和一次不合格记录；列清下一轮补哪一格、还有什么不能由模拟判断。\n\n验收表至少包含：合格且不重复数 / 全部候选、已填格数 / 固定总格数、各格质量分、人工批准数量，以及总生成与审核投入 / 批准数量。批准为零时报告总投入和零产出，不算平均单价。将人工试玩与设备性能单列，未经测量的栏目保持待测。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "MAP-Elites：Illuminating search spaces by mapping elites（v1，2015-04-20；2026-11-06 核验）",
+      "url": "https://arxiv.org/abs/1504.04909"
+    },
+    {
+      "title": "PCG-QD：Procedural Content Generation through Quality Diversity（CoG 2019，作者公开全文；2026-11-06 核验）",
+      "url": "https://antoniosliapis.com.institutedigitalgames.com/articles/pcgqd.php"
+    },
+    {
+      "title": "pyribs GridArchive（stable v0.12.0 文档；2026-11-06 快照，未运行软件包）",
+      "url": "https://docs.pyribs.org/en/stable/api/ribs.archives.GridArchive.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-06 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
