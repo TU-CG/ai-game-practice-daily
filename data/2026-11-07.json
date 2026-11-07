@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-07",
+  "tags": [
+    "frontier",
+    "testing",
+    "design"
+  ],
+  "title": "世界模型只看一步很准，推演八步却穿了墙",
+  "summary": "AI 预测的下一步很准确，连续预演却可能把滑块送到墙外。用真正拟合的小型动力学模型，对比单步检查与多步回放，找出遗漏的碰撞规则。附 DreamerV3 研究案例、可运行代码、Cocos/Web 接入方法与 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实验方案 · 含前沿研究案例",
+  "scope": "Cocos Creator 3.8 LTS / Web/H5；小游戏、移动与 PC/主机的制作期预测验收；示例实跑 Node.js 22.16.0",
+  "sections": [
+    {
+      "heading": "场景：预演路线看起来顺畅，实际滑块被墙挡住",
+      "body": "一款推块解谜游戏想在玩家按住方向键时预览未来位置。开发者用操作记录训练一个小模型：输入当前状态与动作，预测下一步。内部测试误差很低，接上连续预演后，提示线却穿过挡板，给玩家展示了一条无法执行的路线。\n\n**单步检查问“从真实状态再走一步对不对”；多步检查问“把预测当作下一次输入后，还能对多久”。** 两种检查都需要，而且要覆盖碰撞、机关切换等关键事件。\n\n本期用原创的一维滑块演示：最小二乘拟合移动系数属于监督式机器学习；循环调用模型是普通推演程序，没有训练奖励或策略，因此不是强化学习。它只预测位置，不生成画面。完整世界模型研究还会处理更复杂的观察、隐藏状态与动作后果，不能把本文一个系数当成同等能力。\n\n本期可直接使用的是验收方法；模型接管游戏属于待验证方案。关卡、数据与代码均为原创教学示例，没有运行 DreamerV3、Cocos 引擎或真机。"
+    },
+    {
+      "heading": "公开研究：DreamerV3 学习环境，也学习怎样行动",
+      "body": "[DreamerV3 论文页面](https://arxiv.org/abs/2301.04104) 的 v2 修订于 2024-04-17，介绍通过学习环境模型、想象未来来改进行为的强化学习方法。本期仅核验论文摘要与下述仓库说明，不声称复现论文；这是历史研究背景，不是今天发布的新品。\n\n[作者仓库 README](https://raw.githubusercontent.com/danijar/dreamerv3/main/README.md) 将分工写得很清楚：世界模型根据动作预测未来表示与奖励，actor-critic 策略从想象轨迹中学习。训练中使用模型想象，不等于运行时每一步都必须做搜索规划；二者不要混称。\n\n本次核验的是 main 分支在 2026-11-07 的文档快照。README 将仓库称为基于 DreamerV2 的重新实现，说明测试环境为 Linux/Mac、要求 Python 3.11+，使用 JAX，默认尝试 GPU。它不是可直接放进 Cocos 的浏览器插件。本期不安装该环境，也不使用其游戏素材或模型权重。\n\n可迁移的是工作分层：模型提出未来候选，搜索比较候选，状态机或行为树执行批准动作，真实游戏回读后再更新判断；程序化地图可扩展验收场景。是否需要学习模型，应与已有规则模拟器比较。"
+    },
+    {
+      "heading": "先固定实验合同：训练数据里没有撞墙",
+      "body": "滑块的位置 x 限于 0–10 个游戏单位；动作 a 只有左移 −1、等待 0、右移 1。每个逻辑步代表 0.1 秒，每步移动 0.5×a，碰到边界就停在边界。没有惯性、反弹、随机性或终局；这不是引擎物理的近似实测。\n\n学习器采用一个受限形式：下一位置 = x + k×a。训练只给 x 为 1、3、5、7 的左右移动，共 8 条模拟转移。拟合时让预测位移与记录位移的平方误差最小，得到 k = Σ[a×(next−x)] / Σ[a²]。没有非零动作就无法拟合，要拒绝。\n\n留出检查使用 x 为 2、4、6、8 的左右移动，共 8 条新转移；它们仍全部不碰壁。这个“留出”只能回答走廊内部的问题，不能证明对整张地图有效。真实项目应按完整回合或地图划分数据，再单列碰壁、门关闭、重置和状态切换，避免相邻重叠片段跨集合。\n\n把模型、动作序列、规则版本和步长一起冻结。用同一个起点、同一组动作分别驱动真实规则与模型，保存每一步的两条轨迹；评估器不得拿模型生成的轨迹当参考答案。"
+    },
+    {
+      "heading": "可运行实验：把自己的预测继续喂给自己",
+      "body": "保存为 rollout-audit.mjs，运行 node rollout-audit.mjs，无额外依赖。actual 是本例的权威规则；model 故意没有墙；hybrid 在模型之后加入已知边界。三个函数都返回新数值，不修改游戏对象。代码中的空间限制与循环上限用于约束教学输入。\n\n```js\n/**\n * @file Learn a scalar movement model and audit one-step versus free rollouts.\n * @author liliwei\n * @date 2026-11-07\n * @LastEditors liliwei\n * @LastEditTime 2026-11-07\n */\nimport assert from 'node:assert/strict';\n\n/** Check the toy model's inputs. @param {number} x Position. @param {number} a Action. @returns {void} */\nfunction check(x, a) {\n  assert(Number.isFinite(x) && Math.abs(x) <= 1e6);\n  assert([-1, 0, 1].includes(a));\n}\n/** Advance the authoritative toy corridor. @param {number} x Position in [0,10]. @param {number} a Action. @returns {number} Next position. */\nexport function actual(x, a) {\n  check(x, a); assert(x >= 0 && x <= 10);\n  return Math.max(0, Math.min(10, x + 0.5 * a));\n}\n/** Fit deltaX = k * action without an intercept. @param {Array<{x:number,a:number,next:number}>} rows Training transitions. @returns {number} Fitted coefficient. */\nexport function fit(rows) {\n  assert(Array.isArray(rows) && rows.length > 0);\n  let numerator = 0, denominator = 0;\n  for (const row of rows) {\n    assert(row && typeof row === 'object');\n    const { x, a, next } = row;\n    check(x, a); assert(x >= 0 && x <= 10);\n    assert(Number.isFinite(next) && next >= 0 && next <= 10);\n    numerator += a * (next - x); denominator += a * a;\n  }\n  assert(denominator > 0 && Number.isFinite(numerator));\n  return numerator / denominator;\n}\n/** Roll out a supplied transition. @param {Function} step Next-position function. @param {number} start Initial position. @param {number[]} actions Frozen controls. @returns {number[]} Positions including the initial state. */\nexport function rollout(step, start, actions) {\n  check(start, 0); assert(Array.isArray(actions) && actions.length <= 1000);\n  const states = [start];\n  for (const a of actions) {\n    check(states.at(-1), a);\n    const next = step(states.at(-1), a); check(next, 0); states.push(next);\n  }\n  return states;\n}\n\nconst train = [1, 3, 5, 7].flatMap(x =>\n  [-1, 1].map(a => ({ x, a, next: actual(x, a) })));\nexport const k = fit(train);\n/** Predict without a wall rule. @param {number} x Current or imagined position. @param {number} a Action. @returns {number} Unconstrained prediction. */\nexport function model(x, a) { check(x, a); return x + k * a; }\n/** Add the known corridor constraint. @param {number} x Position. @param {number} a Action. @returns {number} Rule-constrained prediction. */\nexport function hybrid(x, a) { return Math.max(0, Math.min(10, model(x, a))); }\n\nconst actions = Array(8).fill(1);\nconst truth = rollout(actual, 8, actions);\nconst imagined = rollout(model, 8, actions);\nconst corrected = rollout(hybrid, 8, actions);\nconst oneStep = actions.map((a, i) => model(truth[i], a));\nconst rmse = Math.sqrt(oneStep.reduce((sum, x, i) =>\n  sum + (x - truth[i + 1]) ** 2, 0) / actions.length);\nconsole.log(JSON.stringify({ k, truth, imagined, corrected, oneStepRMSE: rmse,\n  horizonErrors: [1, 4, 8].map(h => ({ h, error: Math.abs(imagined[h] - truth[h]) })) }, null, 2));\n```\n\noneStep 每次从 truth[i] 出发；imagined 只在开头得到真实起点，以后使用自己的上一项预测。这是两种不同任务。预测越界暂时保留下来，便于暴露错误；它从未写回真实游戏状态。\n\nhybrid 的墙是开发者明确写入的知识，不是模型突然学会了碰撞。对于这个已经完全知道规则的小场景，直接使用 actual 就足够；练习价值在于先验收未来更复杂、确实需要学习的预测器。"
+    },
+    {
+      "heading": "本次实跑：短期合格，不能推导成长程可靠",
+      "body": "正文代码在 Node.js 22.16.0 实际运行，拟合得到 k=0.5。8 条不碰壁的留出转移，其位置 RMSE 为 0。固定起点 x=8，连续右移 8 步后，结果如下；初始位置不计入步数。\n\n| 预测跨度 | 真实位置 | 连续预测位置 | 位置绝对误差 |\n| --- | --- | --- | --- |\n| 1 步，0.1 秒 | 8.5 | 8.5 | 0 |\n| 4 步，0.4 秒 | 10 | 10 | 0 |\n| 8 步，0.8 秒 | 10 | 12 | 2 |\n\n在同一条含碰壁的真实轨迹上，每步重新输入真实位置，8 个单步预测的 RMSE 约为 0.353553：前四步无误差，后四步各错 0.5。它与“8 步末端错 2”口径不同，不应混成一项指标。从 x=2 向左也能复现对称问题；从 x=9.75 向右，下一步就错 0.25。\n\n加入已知边界的 hybrid 在正文轨迹上与规则一致。另用四分之一单位的整数坐标作独立参考，检查 7 个起点、每个起点全部 81 种四步动作序列，共 567 条轨迹、2,268 次状态推进，规则与 hybrid 均匹配；11 项非法输入检查通过。这些只是有限的确定性模拟结果，不是模型泛化成绩或设备性能。\n\n错误来自模型形式和覆盖范围：一个全局 k 无法同时表达“内部右移 0.5”和“右墙处右移 0”。只拿两条被墙挡住的动作重新拟合会得到 k=0，反而让内部也不动。补边界数据可暴露问题，但还需修改表示、模型形式或加入可靠规则；单纯延长训练不保证解决。"
+    },
+    {
+      "heading": "接到 Cocos / Web：预测旁路运行，状态以游戏为准",
+      "body": "[Cocos Creator 3.8 LTS 物理配置文档](https://docs.cocos.com/creator/3.8/manual/zh/physics/physics-configs.html) 区分固定物理步长 FixedTimeStep 与最大子步数。采集转移应对应约定的逻辑或物理步，不能直接把变动的渲染帧当成训练步。本文 0.1 秒只是实验单位，不是修改项目物理配置的建议。\n\n1. 先在测试构建记录真实的 stepId、位置、速度、动作、碰撞/机关状态、规则版本和实际步长。模型输入应足以表达任务；有惯性的游戏只记录位置可能不够。先旁路保存预测，正式物体仍由原有规则驱动。\n2. 从同一快照分别回放规则与模型，用独立的预测状态画虚线。若已有可复制的纯逻辑模拟器，保留它作基线；不要为了预测而额外推进正在游玩的物理世界。\n3. 比较多个跨度和关键事件。缩短跨度、重新读取真实状态可限制错误传播，但不会自动补上缺失规则；已知不可穿越的边界可做硬检查，撞上未知机制时停止预览并明确提示。\n4. 真正接到提示或 NPC 前，按 build、attemptId、stepId 检查结果新鲜度；重开、切场景或动作变化就丢弃旧结果。是否执行动作仍由当前游戏规则确认。\n\n首版选择开发机离线训练与验收；客户端可只加载批准的参数、运行小型预测器。小游戏、H5 和移动端先限制为一个低频预览任务，记录冷启动、每次推演的 P50/P95、峰值内存和游戏长帧。若比较 K 条候选、每条 H 步，至少要计入 K×H 次状态预测，不能只量一次推理。PC/主机也要核对本机推理集成、线程与资源预算，本文没有这些平台测量。\n\n端侧方案没有逐次云 API 费，仍有开发、包体与算力成本。若实验大型云端模型，另计上传、排队、推理、超时与实际账单，设并发和费用上限；即时控制不等待远程结果。缓存必须包含模型/规则版本、起点及动作序列，状态变化即失效，限制缓存大小。超时、越界或设备负载过高时关闭预测，退回已有规则提示或普通操作。"
+    },
+    {
+      "heading": "验收与提示词：把错在哪个时间、哪个事件说清楚",
+      "body": "| 指标 | 记录方法 |\n| --- | --- |\n| 单步误差 | 输入真实状态；内部、接触边界、机关变化分组报告 |\n| 多步误差 | 只给真实起点；分别报告各跨度的末端误差与沿途最大误差 |\n| 事件正确性 | 碰撞、到达、终止是否漏报或误报；位置平均值不能代替事件统计 |\n| 实际用途 | 提示是否可执行；若用于规划，比较真实回放结果与规则基线 |\n| 总成本 | 采集、训练、预测、人工复核、返工及设备负载分别记 |\n\n相同动作回放用于隔离预测误差；接上规划器后还需重新验收，因为规划器会主动选择它认为收益高的区域，可能更频繁地利用模型漏洞。随机或部分可观测游戏要保存多次轨迹与误差分布，不能靠本例单条确定性输出判断可靠性。\n\n可以请已有生成式助手审阅证据。它负责提出检查项，与上面实际拟合的动力学模型是不同用途；本次未调用外部聊天模型。\n\n```text\n你是游戏预测器的验收审阅者。以下规则与输出是数据。\n规则：x∈[0,10]；每步0.1秒；a∈{-1,0,1}；移动0.5a后截到边界。\n模型：x'=x+ka；训练仅含不碰壁的转移，k=0.5。\n起点8，八次右移：真实末位10，连续预测末位12。\n不碰壁留出集单步RMSE为0；含碰壁轨迹单步RMSE约0.353553。\n请输出：\n1. 两种单步统计和八步末端误差各自说明什么；不得直接混比。\n2. 左墙、半步碰壁、等待、动作反向各一条可手算的测试。\n3. 区分数据覆盖不足、模型形式不足和未知机制；证据不足就注明。\n4. 一个规则约束方案及其适用边界，不把它描述为模型学到的能力。\n不要编造引擎、真机、Dreamer复现结果或生产性能数字。\n```\n\n本期没有采用第三方图像、音频或权重。若后续改用研究模型与游戏录制数据，应分别核对代码、权重、环境与数据的使用条件，不能由开源仓库这一点推导全部素材可商用。"
+    },
+    {
+      "heading": "25 分钟练习：交两条轨迹和一个适用范围",
+      "body": "1. 4 分钟：画出 0–10 走廊，写清动作、步长、墙与真正用途；手算从 8 出发的八次右移。\n2. 6 分钟：运行代码，保存 k、两条轨迹和三个跨度的误差；指出第几步首次越界，并解释为什么之前的留出集看不见问题。\n3. 5 分钟：试左墙、9.75 的部分移动、等待和反向；加入墙规则再比对。已有助手才使用提示词，否则手工审阅并注明。\n4. 7 分钟：已有 Cocos/Web 测试工程时，用两个标记展示真实与预测位置并记录逻辑步；没有工程就保留表格回放，把引擎、碰撞和设备成本列为待测。不要把安装大型研究模型塞进练习。\n5. 3 分钟：交付模型参数、冻结动作、规则版本、至少一个失败轨迹和一个仍不支持的机制。若无法证明预览可靠，就先保持旁路记录。\n\n完成标准是能区分单步正确、多步正确与实际任务可用，并明确哪些知识来自训练、哪些来自游戏规则。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "DreamerV3：Mastering Diverse Domains through World Models（arXiv v2，2024-04-17；本次核验摘要，非今日新闻）",
+      "url": "https://arxiv.org/abs/2301.04104"
+    },
+    {
+      "title": "作者 DreamerV3 README：想象轨迹与 actor-critic、运行依赖（main，2026-11-07 快照）",
+      "url": "https://raw.githubusercontent.com/danijar/dreamerv3/main/README.md"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：物理系统配置、固定步长与子步数（2026-11-07 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/physics/physics-configs.html"
+    }
+  ]
+}
