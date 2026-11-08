@@ -58,6 +58,17 @@
   ],
   "reports": [
     {
+      "date": "2026-11-08",
+      "file": "2026-11-08.json",
+      "tags": [
+        "performance",
+        "development",
+        "gameplay"
+      ],
+      "title": "AI 提示越算越晚：给实时推理留一个最新快照",
+      "summary": "伙伴已经走到下一片区域，AI 还在推荐几秒前的道具。用可运行的队列模拟，对比逐个处理与只保留最新待算快照，分清界面流畅、推理速度和结果时效。附 ONNX Runtime Web 工具案例、Cocos/Web 接入、冷启动与降级方案，以及 25 分钟练习。"
+    },
+    {
       "date": "2026-11-07",
       "file": "2026-11-07.json",
       "tags": [

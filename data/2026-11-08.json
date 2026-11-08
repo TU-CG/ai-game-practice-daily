@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-08",
+  "title": "AI 提示越算越晚：给实时推理留一个最新快照",
+  "summary": "伙伴已经走到下一片区域，AI 还在推荐几秒前的道具。用可运行的队列模拟，对比逐个处理与只保留最新待算快照，分清界面流畅、推理速度和结果时效。附 ONNX Runtime Web 工具案例、Cocos/Web 接入、冷启动与降级方案，以及 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法；调度模拟已验证，模型接入待验收",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5；小游戏与移动、PC/主机可迁移调度合同，需各自适配运行时",
+  "tags": [
+    "performance",
+    "development",
+    "gameplay"
+  ],
+  "sections": [
+    {
+      "heading": "场景：模型每次都算完，提示却越来越过时",
+      "body": "一款俯视角收集游戏，让伙伴在几件可见道具中建议一个目标。设想用离线训练的小型神经网络，根据距离、危险与背包状态给候选打分。角色持续移动，游戏每 50 毫秒采集一份状态；如果一次推理要 200 毫秒，还把每份状态都排队，玩家收到的就会是越来越旧的建议。\n\n**移到后台解决的是谁占用主线程；限制队列解决的是还值得计算哪些输入。** 两件事需要分别处理。本文的 50、200、300 毫秒都是原创实验参数，不是设备测量或推荐性能指标。\n\n神经网络打分属于判别式机器学习；队列合并、过期检查和回退是普通程序逻辑，不属于强化学习。NPC 的状态机或行为树可以消费通过规则检查的建议，寻路仍由现有搜索负责。本期实际运行调度模拟，没有训练或调用模型，也没有运行 Worker、Cocos 或真机；它不证明推荐正确或游戏更流畅。"
+    },
+    {
+      "heading": "公开工具案例：Worker 能让出主线程，不会替你消掉积压",
+      "body": "[ONNX Runtime Web 的性能指南](https://onnxruntime.ai/docs/tutorials/web/performance-diagnosis.html) 明确区分模型性能和界面响应：Proxy Worker 把计算移到独立 Worker，主要改善后者。它是推理运行库的能力，不是一个现成的游戏推荐模型。\n\n[配置文档](https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html) 给出了采用边界：WASM Proxy Worker 不能直接用于 WebGPU EP，创建 Blob Worker 也可能受到 CSP 限制；WASM 多线程依赖浏览器支持及跨源隔离，不能只把线程数改大。JavaScript 与 WASM 文件还必须来自同一构建。\n\n两页均为 2026-11-08 核验的滚动文档，本次未安装运行库，因此没有虚构已验证的包版本。实际集成时锁定 onnxruntime-web 的确切版本、模型文件与后端；先在目标浏览器验证，再谈优化。这是长期工程方法，不是今日新品报道。"
+    },
+    {
+      "heading": "先定合同：一个正在算，一个等待位，允许旧快照被替换",
+      "body": "本例只处理“当前状态的可选建议”。正在计算的快照继续完成；等待位最多放一份，新的快照覆盖旧的待算快照。完成后立即取等待位，不把所有采样都发送给 Worker，再期待 Worker 的消息队列自动变短。\n\n1. 主线程保存采集时间、请求 ID、场景代次和规则/模型版本。特征是独立快照，不传可变游戏节点。\n2. 空闲时发一份；忙碌时仅更新本地等待位。必须真正收到完成或确认停止，才能释放计算槽。\n3. 回包先检查身份与场景，再用主线程同一单调时钟计算“现在减采集时间”；还要确认目标仍存在、可达且允许推荐。通过时效检查不等于通过玩法检查。\n4. 持续输入时，不要求回包 ID 等于最新采样 ID，否则慢模型可能永远没有结果可用；采用年龄上限与当前规则校验，超限则保留规则提示或暂不显示。\n\n这适合可替代的状态观察。领取奖励、攻击指令、购买和逐条录音都可能需要保留每个事件，不能照搬覆盖策略。场景代次变化时清掉等待位、拒绝旧回包；不能只靠一个全局“忙碌”布尔值辨认生命周期。"
+    },
+    {
+      "heading": "可运行模拟：把排队时间也算进结果年龄",
+      "body": "保存为 inference-queue.mjs，运行 node inference-queue.mjs，无额外依赖。所有时间都是虚拟毫秒，不等待真实时钟。假设单个串行计算槽、每次固定耗时、传输与采样耗时为零；同一时刻先处理完成，再处理新输入。输入停止后继续把队列处理完。\n\n```javascript\n/**\n * @file Compare inference scheduling with deterministic virtual time; no model is executed.\n * @author liliwei\n * @date 2026-11-08\n * @LastEditors liliwei\n * @LastEditTime 2026-11-08\n */\n\n/**\n * Replay one serial inference slot; completion wins ties with a new arrival.\n * @param {number[]} arrivals Strictly increasing integer capture times in milliseconds.\n * @param {number} cost Positive simulated service time, not measured model latency.\n * @param {'fifo'|'latest'} mode Keep all pending snapshots or just the newest one.\n * @param {number} budget Maximum capture-to-completion age accepted by the demonstration.\n * @returns {object} Full completion trace and queue accounting, including discarded inputs.\n */\nexport function replay(arrivals, cost, mode, budget = 300) {\n  if (!Array.isArray(arrivals) || arrivals.length > 1000 ||\n      !Number.isSafeInteger(cost) || cost < 1 || cost > 10000 ||\n      !Number.isSafeInteger(budget) || budget < 1 || budget > 1000000 ||\n      !['fifo', 'latest'].includes(mode)) throw new Error('bad settings');\n  for (let k = 0; k < arrivals.length; k++) {\n    if (!Number.isSafeInteger(arrivals[k]) || arrivals[k] < 0 ||\n        arrivals[k] > 1000000 || (k && arrivals[k] <= arrivals[k - 1])) {\n      throw new Error('bad capture times');\n    }\n  }\n  let i = 0, active = null, replaced = 0, maxPending = 0;\n  const pending = [], rows = [];\n  /** @param {object} input Captured snapshot. @param {number} at Start time. @returns {void} */\n  const start = (input, at) => { active = { ...input, start: at, done: at + cost }; };\n  while (i < arrivals.length || active) {\n    const nextArrival = arrivals[i] ?? Infinity;\n    if (active && active.done <= nextArrival) {\n      const at = active.done;\n      const age = at - active.captured;\n      rows.push({ ...active, age, usable: age <= budget });\n      active = null;\n      if (pending.length) start(pending.shift(), at);\n    } else {\n      const input = { id: i, captured: arrivals[i++] };\n      if (!active) start(input, input.captured);\n      else {\n        if (mode === 'latest' && pending.length) {\n          pending[0] = input;\n          replaced++;\n        } else pending.push(input);\n        maxPending = Math.max(maxPending, pending.length);\n      }\n    }\n  }\n  return {\n    submitted: arrivals.length, completed: rows.length, replaced, maxPending,\n    usable: rows.filter(row => row.usable).length,\n    maxAge: Math.max(0, ...rows.map(row => row.age)),\n    finishedAt: rows.at(-1)?.done ?? null, rows\n  };\n}\n\nconst arrivals = Array.from({ length: 20 }, (_, i) => i * 50);\nfor (const [mode, cost] of [['fifo', 200], ['latest', 200], ['latest', 400]]) {\n  const { rows, ...summary } = replay(arrivals, cost, mode);\n  console.log(JSON.stringify({ mode, cost, ...summary, ids: rows.map(row => row.id) }));\n}\n```\n\nage 包含排队和处理时间；usable 只表示 age≤300。实际 Worker 还应计入特征提取、数据复制、消息传递与 UI 应用时间。这段代码用于解释调度取舍，并不是生产版 Worker 管理器。"
+    },
+    {
+      "heading": "本次实跑：更少的计算，留下更及时的候选",
+      "body": "在 v22.16.0 实际运行，从 0 到 950 毫秒共提交 20 份快照。下表统计完整处理结束后的结果；“待算峰值”不包含正在计算的那一份。\n\n| 策略 / 每次模拟耗时 | 完成数 | 被替换的待算数 | 待算峰值 | 最大结果年龄 | 通过 300 毫秒门槛 |\n| --- | --- | --- | --- | --- | --- |\n| 全部排队 / 200 毫秒 | 20 | 0 | 15 | 3050 毫秒 | 1 |\n| 最新等待位 / 200 毫秒 | 6 | 14 | 1 | 250 毫秒 | 6 |\n| 最新等待位 / 400 毫秒 | 4 | 16 | 1 | 650 毫秒 | 0 |\n\n第二行完成的快照编号是 0、3、7、11、15、19，全部在虚拟时间 1200 毫秒前结束；第一行直到 4000 毫秒才结束。被替换的 14 份没有执行，必须如实计入，不能把 6/6 包装成模型准确率或全输入处理率。\n\n第三行是反例：等待位已经只有一个，服务本身仍然太慢，所有结果都超时效门槛。压队列不能保证达标，也不会把 400 毫秒的模型变快。降低采样只能减少负载；单次耗时已超过门槛时，需要实测更快的模型或后端，或者回退。\n\n另外用独立的逐毫秒推进程序，核对 64 种采样时间表 × 5 种耗时 × 2 种策略，共 640 组；完成轨迹一致，另通过 14 项非法输入和时效边界检查。证据只覆盖这个固定耗时、串行、零传输的模拟，不涉及模型精度、帧率、电量或网络效果。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：把加载、调度和展示分开接",
+      "body": "以下为待在工程验证的接入步骤。[Cocos Creator 3.8 LTS Web 发布文档](https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-web.html) 提供 Web Mobile / Web Desktop 构建入口；应在实际构建产物检查模型与 Worker 路径，而不只测试编辑器预览。该页旧浏览器版本说明不作为当前兼容性结论。\n\n- 加载：先启动规则提示，在可接受的加载阶段创建一个推理会话。分别记录模型下载、会话初始化、首次推理与后续推理；运行库、权重和预处理版本一起固定。模型文件缓存命中不代表会话和首次推理已经完成。\n- 调度：只有 ready 后才提交；在主线程实现一个计算槽和一个等待位。按输入变化或低频采样触发，不在每个 update 无条件创建新请求。输入缓冲区传出后，不复用仍属于计算任务的数据。\n- 展示：Worker 只返回候选 ID 与分数，由主线程重新检查当前道具，再更新提示。切场景、重开、失焦与销毁时清理采样和待算输入，让旧代次回包失效。\n- 超时：展示端超时后可以立即回退，但不能假装底层任务已经结束，再不断启动新任务。等待其完成并丢弃旧结果，或确认终止专用 Worker 后重建；后者会带来重新初始化成本。\n\n[MDN 的 Worker 指南](https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers) 说明线程间通过消息复制或转移数据，以及 terminate 可结束 Worker。这里的“停止展示”不等于取消推理；云端请求被本地放弃也不保证服务端停止计算或计费。\n\n小游戏应单独核验宿主的 Worker、WASM、包体与下载限制；原生移动、PC/主机可复用队列与版本合同，但要接各自的推理线程和资源生命周期，不能直接复制浏览器初始化代码。"
+    },
+    {
+      "heading": "验收与预算：同时量新鲜度、游戏响应和实际代价",
+      "body": "首版可把模型放端侧，在一个专用 Worker 中运行；不需要逐次云 API 请求，但仍有下载流量、内存、CPU/GPU 与电量成本。如果改用云端，把往返网络和服务排队算进结果年龄，限制在途请求数并记录实际账单，不预估“免费”或固定提速。\n\n| 记录项 | 比较方法 |\n| --- | --- |\n| 冷启动 | 首次下载、命中缓存、会话初始化、首个可显示结果分别计时 |\n| 时效与覆盖 | 采集到显示的 P50/P95、超期数、替换数，以及多久没有合格新提示 |\n| 游戏响应 | 同设备、同关卡回放比较无模型、主线程、Worker 三组的帧时间与输入响应 |\n| 推荐质量 | 人工或规则标注的合法目标命中、过期目标拦截、错误建议；不能用耗时替代 |\n| 负载与费用 | 待算峰值、内存峰值、持续运行负载、下载量；云端另记请求量和实付费用 |\n\n缓存分两层：按模型版本缓存静态文件；结果缓存则还要匹配场景、相关状态和有效期。道具已经被捡走时，即使字符串键相同也不能复用旧建议。设备过热、初始化失败或长期无合格结果时，减少推理频率或关闭模型，规则提示继续工作。具体门槛来自目标设备与玩法测量，本文的 300 毫秒仅为练习设定。\n\n可以把真实记录交给已有编程助手，使用下面的审阅提示词。它只分析证据，不替你补性能数字。\n\n```text\n你在审查 Cocos/Web 的可选道具推荐器。输入是同设备、同关卡的请求日志：\nid、epoch、capturedAt、sentAt、receivedAt、appliedAt、backend、丢弃原因。\n另附构建/模型版本、冷启动记录、帧时间、实际费用；缺项标为未知。\n区分排队、推理、传输和展示延迟。只凭已有时间点计算；缺少边界就不能拆分。\n指出等待位是否有界、超时后是否仍有任务运行、切场景是否接受旧回包。\n给一个最小修改与一个可推翻它的对照实验。不得用成功回包率代替推荐准确率，\n不得把模拟耗时写成真机结果，也不得建议覆盖奖励或购买事件。\n```"
+    },
+    {
+      "heading": "25 分钟练习：交一份有上限、能回退的推理合同",
+      "body": "1. 4 分钟：选一个可以暂不显示的建议功能，写清可覆盖的是状态快照；列出必须逐条处理的事件，排除出队列合并。\n2. 6 分钟：运行代码，手算前两次完成的年龄，保存三行真实输出。把耗时改成 400，解释为何等待位有界仍全部不合格。\n3. 5 分钟：画 ready、busy、fallback 三种状态，补场景代次、结果过期和真正停止后的重建路径。向已有助手提交提示词，或手工审阅并注明。\n4. 7 分钟：已有工程与模型时，低频旁路采样并记录冷启动和结果年龄；没有模型就做模拟回包适配，注明这不是真实推理性能，不临时下载大模型凑测量。\n5. 3 分钟：交付版本、输入时间线、替换/超期计数、一个失效回包和默认提示行为。完成标准是知道何时采用、何时丢弃以及何时继续普通玩法。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "ONNX Runtime Web：Performance Diagnosis，Proxy Worker 与模型性能的区别（滚动文档，2026-11-08 核验；未安装软件包）",
+      "url": "https://onnxruntime.ai/docs/tutorials/web/performance-diagnosis.html"
+    },
+    {
+      "title": "ONNX Runtime Web：env Flags and Session Options，线程、Proxy Worker 和 WASM 构建匹配（滚动文档，2026-11-08 核验）",
+      "url": "https://onnxruntime.ai/docs/tutorials/web/env-flags-and-session-options.html"
+    },
+    {
+      "title": "MDN：Using Web Workers，消息传递和线程终止（Web API 滚动文档，2026-11-08 核验）",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Web_Workers_API/Using_web_workers"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Publish to Web Platforms（2026-11-08 核验；不沿用旧浏览器兼容表）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-web.html"
+    }
+  ]
+}
