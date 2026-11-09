@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-09",
+  "tags": [
+    "operations",
+    "gameplay",
+    "testing"
+  ],
+  "title": "AI 匹配给出五五开：先看玩家评分有多不确定",
+  "summary": "两个新玩家预测胜率都是五成，是否就能认定势均力敌？用 OpenSkill 实际更新评分，区分胜负预测、实力不确定性与排行榜分数，再把它们接到服务端匹配。附可运行实验、Cocos/Web 接入、评估指标和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 原创模拟实验",
+  "scope": "OpenSkill Python 6.2.0 / Python 3.12；Cocos Creator 3.8 LTS、Web/H5 与移动游戏；匹配方法可迁移至 PC/主机联机游戏",
+  "sections": [
+    {
+      "heading": "场景：两边都没资料，五五开可能只是暂时不知道",
+      "body": "一款三分钟一局的推箱竞速游戏准备加入排位匹配。两位新玩家都没有比赛记录，系统给出 A、B 各 50% 的预测胜率。另一组有较多记录的玩家也得到 50%。两组都可能谁赢谁输难料，但第一组还可能是一位熟练玩家对一位初学者，只是系统尚未分辨出来。\n\n**胜负难预测，与有把握认为两人实力接近，是两个问题。** 本期用贝叶斯评分展示这种区别：模型根据已确认的比赛结果更新对实力的估计，属于概率机器学习；它不生成台词，不控制角色动作，也不是通过奖励训练策略的强化学习。\n\n排队、取消、分配房间由普通状态机管理；搜索算法从合法候选里找配对。若有机器人，它的行为树或学习策略是另一套系统，不能因为缺人就把机器人伪装成真人。本期主讲匹配前的判断，游戏、玩家参数和比赛结果均为原创教学数据。"
+    },
+    {
+      "heading": "公开工具案例：OpenSkill 保存两个数，别只留下排行榜分",
+      "body": "本期实际使用 [OpenSkill 6.2.0 的 PlackettLuce 接口](https://openskill.me/en/v6.2.0/manual.html)。它以 mu 表示估计的实力位置，以 sigma 表示估计的不确定性；rate 根据名次更新评分，predict_win 给出模型的胜负预测。默认 ordinal 是 mu−3×sigma，可用于展示或排序；它把不确定性也压进一个数，不适合直接当作唯一配对距离。\n\n例如 (mu=25, sigma=2) 与 (31, 4) 的 ordinal 都是 19，均值却相差 6。还要区分 sigma 与 beta：前者描述对玩家实力的认识，后者在本例预测公式里体现单局表现的波动。缩小 sigma 不是把游戏变得没有随机性。\n\n这是既有工具的固定版本教程，不是今日新品或性能评测。已核验该版本的 [MIT 许可](https://raw.githubusercontent.com/vivekjoshy/openskill.py/v6.2.0/LICENSE)：允许使用、修改和分发，包括售卖副本，保留相应版权与许可声明。本文没有采用第三方美术或音频素材。"
+    },
+    {
+      "heading": "接入顺序：先定结果合同，再让评分参与选择",
+      "body": "1. 先限定同一规则版本、同一模式的一对一对局。记录玩家业务 ID、matchId、结算时间和确认名次；练习无平局；正式玩法的平局、掉线须先约定独立结果类型。首版只吃确认胜负，不临时把点击数、付费或击杀数当成实力标签。\n2. 服务端保存 mu、sigma、ratingRevision、模型版本和参数。先用赛前评分记录预测，比赛确认结束后再更新。重复结算同一个 matchId 必须返回原结果；两人的新评分与已处理标记要在同一事务内写入。\n3. 先按模式、版本、地区、连接质量与可用状态过滤候选，再比较实力信息。延迟不合格的对手不能因为预测接近 50% 就入选。本文不设置通用的“公平分数线”。\n4. 为新玩家保留明确的定位路径：限制极端配对、监控等待时间，并通过真实比赛逐步积累证据。把高 sigma 一律拒绝，会让没有历史的人永远无法开始；这是匹配策略需要解决的问题，评分库不会自动替你处理。\n5. 先旁路记录候选与建议，不改变现有分配。通过历史回放与排队模拟后，再在受控范围比较新旧策略。不能拿同一批旧对局直接宣称新匹配会提高留存。"
+    },
+    {
+      "heading": "可运行实验：胜率之外，再算一次实力差的分布",
+      "body": "在独立 Python 环境安装 python -m pip install openskill==6.2.0，保存下列代码为 rating-audit.py，运行 python rating-audit.py。它会真正调用评分库更新一次模拟比赛，没有连接线上服务。\n\n额外的 p_gap_within 是本文自定义诊断：假设两人的实力信念相互独立且服从高斯分布，则实力差的均值为 muA−muB，标准差为 sqrt(sigmaA²+sigmaB²)。计算它落在 −5 到 5 之间的概率。**5 分是教学容差，不是经过玩家体验验证的门槛。** 这里不加入 beta，因为问的是潜在实力差，而非这一局的表现差。\n\n```python\n\"\"\"Compare predicted wins and skill uncertainty in an original 1v1 example.\n\nAuthor: liliwei\nDate: 2026-11-09\nLastEditors: liliwei\nLastEditTime: 2026-11-09\n\"\"\"\nimport json\nimport math\nfrom statistics import NormalDist\nfrom openskill.models import PlackettLuce\n\nmodel = PlackettLuce()\n\n\ndef inspect_pair(a, b, gap=5.0):\n    \"\"\"Return A's predicted win odds and belief about the absolute skill gap.\n\n    Args: a, b are ratings; gap is a positive tolerance in skill units.\n    Returns: probabilities, the skill-difference deviation, and display scores.\n    Assumes independent Gaussian skill beliefs; no game is simulated here.\n    \"\"\"\n    values = (a.mu, b.mu, a.sigma, b.sigma, gap)\n    if not all(math.isfinite(v) and abs(v) <= 1000 for v in values):\n        raise ValueError(\"finite teaching inputs within +/-1000 required\")\n    if min(a.sigma, b.sigma, gap) <= 0:\n        raise ValueError(\"positive sigma and gap required\")\n    spread = math.hypot(a.sigma, b.sigma)\n    difference = NormalDist(a.mu - b.mu, spread)\n    return {\n        \"p_win_a\": model.predict_win([[a], [b]])[0],\n        \"p_gap_within\": difference.cdf(gap) - difference.cdf(-gap),\n        \"gap_sigma\": spread,\n        \"display\": [a.ordinal(), b.ordinal()],\n    }\n\n\nif __name__ == \"__main__\":\n    cases = {\n        \"known_pair\": (model.rating(25, 2), model.rating(25, 2)),\n        \"new_pair\": (model.rating(), model.rating()),\n        \"same_display\": (model.rating(25, 2), model.rating(31, 4)),\n    }\n    for name, (a, b) in cases.items():\n        print(name, json.dumps(inspect_pair(a, b)))\n    a, b = model.rating(), model.rating()\n    [[a_after], [b_after]] = model.rate([[a], [b]], ranks=[1, 2])\n    print(\"one_a_win\", json.dumps({\n        \"before\": [[a.mu, a.sigma], [b.mu, b.sigma]],\n        \"after\": [[a_after.mu, a_after.sigma], [b_after.mu, b_after.sigma]],\n    }))\n```\n\n[该版本的原作者实现](https://raw.githubusercontent.com/vivekjoshy/openskill.py/v6.2.0/openskill/models/weng_lin/plackett_luce.py) 可核对两队 predict_win 的计算和 ordinal 的定义。p_gap_within 不是库自带的公平指标，也不是实际比分接近的概率；相关玩家的估计可能存在依赖，模型假设是否合理还要验证。"
+    },
+    {
+      "heading": "本次实跑：同样五五开，证据强弱不同",
+      "body": "在 Python 3.12.14、OpenSkill 6.2.0 实际运行，得到以下结果。两组低 sigma 参数是人工构造的“较确定”情境，不是由真实玩家日志训练得到。\n\n| 情境 A / B 的 (mu, sigma) | A 预测胜率 | 实力差在 ±5 内的模型概率 | 双方展示分 |\n| --- | --- | --- | --- |\n| (25, 2) / (25, 2) | 50.00% | 92.29% | 19 / 19 |\n| (25, 8.333…) / (25, 8.333…) | 50.00% | 32.86% | 0 / 0 |\n| (25, 2) / (31, 4) | 20.87% | 40.46% | 19 / 19 |\n\n第一、二行说明：均值相同可以得到相同胜率，不确定性仍相差很大。第三行说明：排行榜分相同，也不保证模型预测五五开。上述概率只是在给定参数和假设下的计算，不是实际匹配满意度。\n\n另从两个默认新评分开始，提交一次 A 胜：A 变为 (27.635389, 8.065901)，B 变为 (22.364611, 8.065901)，原输入保持不变。把同一结果再当新比赛提交，A 的 mu 会继续涨到 29.656297；所以去重必须在业务结算层完成。\n\n本次还检查了 25 组配对的双方交换、容差扩大与输入不变，13 项非法参数，以及胜负次序反转。它们验证计算与接口用法，不证明模型已经校准，更不证明线上新策略优于旧策略。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：模型在服务端，客户端保留清楚的排队状态",
+      "body": "本期建议将 Python 评分放在自有服务端。Cocos/H5 只发送加入或取消匹配意图，接收 ticketId、状态版本、房间信息；不能提交“我的新 mu 是多少”。[Cocos Creator 3.8 LTS WebSocket 客户端文档](https://docs.cocos.com/creator/3.8/manual/en/advanced-topics/websocket.html) 说明原生环境支持 Web 标准接口；小游戏仍须核对目标平台的网络适配、合法域名及连接限制。以下是待在工程验收的方案：\n\n- 客户端用 idle、queued、assigned 管理状态，每个玩家只保留一个有效票据。重连先查询票据，取消与分配竞态由服务端裁定；不能收到迟到消息就直接跳房间。\n- 匹配服务先缩小候选集合，再调用预测；不要每个渲染帧重算所有玩家两两组合。限定每轮候选数、队列扫描频率和并发，用高峰排队模拟决定预算。\n- 分开记录排队等待、网络往返、候选检索、评分计算和房间分配的 P50/P95。这里没有大语言模型调用费，仍有 CPU、数据库、流量和运维费用；本文没有测得生产延迟或吞吐。\n- 缓存评分快照和候选预测时，键包含双方 ratingRevision、模式、规则与模型版本；确认房间前重新检查评分版本和可用状态。只靠缓存过期时间不能防止重复分配。\n- 模型服务异常时，按预先批准的旧匹配规则运行，或保留排队并允许取消；结果结算保留在可靠队列中，恢复后按既定顺序处理。练习模式可作明确标注的选项，不能改写排位结果来“补足五成胜率”。\n\n移动游戏、PC/主机联机游戏可复用同一后端合同；跨设备输入、队伍组排、角色克制和不同模式要单独评估。单一实力数值不足以解释所有对局差异。"
+    },
+    {
+      "heading": "怎么验收：预测、排队和体验分别记分",
+      "body": "先按时间回放已确认比赛：每局只读当时评分，保存预测，再更新。模型选择在较早记录上完成，较晚记录用于验收；补发与重复结果先按业务规则整理。\n\n| 维度 | 记录方法 |\n| --- | --- |\n| 预测校准 | 将预测分桶，比较平均预测与实际胜率，列样本数；另算平均 (p−y)²，y 为 A 胜取 1、负取 0 |\n| 新玩家覆盖 | 单列新玩家与已有记录玩家；统计等待、取消、无候选，防止靠排除难匹配的人改善均值 |\n| 排队取舍 | 用同一到达序列比较等待 P50/P95、配对率、地区与模式分组；不会发生的反事实赛果不能从旧日志中凭空补出 |\n| 玩法体验 | 有效对局里的悬殊比分、提前退出及人工反馈，与胜负预测分开；真实策略收益另做受控实验 |\n| 结算可靠性 | 同 matchId 重放、乱序到达、事务失败与重连；检查两人评分和处理标记一致 |\n\n可以请已有生成式助手审阅方案，它不参与运行时配对。把实际字段、代码和输出附上，再用这段提示词：\n\n```text\n审阅这个一对一匹配原型。逐项区分：模型预测、实力不确定性、\n业务匹配规则和真实体验证据。用给定三组参数解释为什么 50% 胜率\n或相同 ordinal 都不足以证明合适。检查新玩家会不会被永久拒绝，\n同 matchId 是否可能重复加分，取消后旧票据能否继续分房。\n只引用输入中的证据；缺少数据就列待测项，不编造延迟、留存或胜率。\n输出：一个具体反例、对应修正、能推翻修正的验收场景。\n```\n\n生成式助手的用量、等待与人工审阅另记，不能并入评分库的计算性能。"
+    },
+    {
+      "heading": "25 分钟练习：交一份能解释新玩家处境的匹配记录",
+      "body": "1. 4 分钟：写清自己的单局胜负规则、模式与连接要求，手算两种参数的 ordinal 都为 19。\n2. 6 分钟：在独立环境运行固定版本代码，保存三组输出和一次评分更新；依赖未就绪就先手算并标明未运行。\n3. 5 分钟：把 gap 从 5 改为 3、10，观察诊断概率变化；把第三组两人交换，检查胜率互补。解释为什么不能任选一个容差就宣布公平。\n4. 7 分钟：画出加入、取消、分配、结算的服务流程，设计一次重复 matchId 和一次取消后的迟到分配。已有测试后端才实跑接口；没有就保留事件表，把事务与 Cocos 联调标为待测。\n5. 3 分钟：提交代码、依赖版本、结果表、新玩家处理规则，以及至少一个模型没有描述的因素，例如角色克制。用提示词或人工审阅检查结论是否超出证据。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "OpenSkill 6.2.0：User Manual，评分、不确定性、名次与预测接口（2026-11-09 核验）",
+      "url": "https://openskill.me/en/v6.2.0/manual.html"
+    },
+    {
+      "title": "OpenSkill v6.2.0 原作者源码：PlackettLuce 的 rate、predict_win 与 ordinal（2026-11-09 核验）",
+      "url": "https://raw.githubusercontent.com/vivekjoshy/openskill.py/v6.2.0/openskill/models/weng_lin/plackett_luce.py"
+    },
+    {
+      "title": "OpenSkill v6.2.0：MIT LICENSE，使用与分发条件（2026-11-09 核验）",
+      "url": "https://raw.githubusercontent.com/vivekjoshy/openskill.py/v6.2.0/LICENSE"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：WebSocket Client，跨端网络接口（2026-11-09 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/advanced-topics/websocket.html"
+    }
+  ]
+}
