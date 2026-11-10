@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-10",
+  "tags": [
+    "gameplay",
+    "testing",
+    "development"
+  ],
+  "title": "让 AI 听懂游戏口令：先学会什么时候不行动",
+  "summary": "玩家没有下令，角色却转了向：问题可能出在把分类第一名直接当成操作。用可运行的拒识实验，保留未知词与背景噪声，比较误触发和漏掉口令的代价。附 TensorFlow.js 公开工具案例、Cocos/Web 接入方案及 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创拒识实验",
+  "scope": "Cocos Creator 3.8 LTS / 浏览器 Web、H5 原型；小游戏、原生移动端及 PC/主机迁移验收方法，录音和推理接口需另适配",
+  "sections": [
+    {
+      "heading": "场景：有人在聊天，角色却以为收到了命令",
+      "body": "一款慢节奏推箱游戏想增加语音操作：按住话筒，说一个独立的 left 或 right，让角色移动一格。开发者只取这两个标签中分数较高的那个，于是玩家清嗓子、旁人聊天，也可能变成移动。模型其实把“未知词”排在第一，接入代码却提前删掉了它。\n\n**分类器总能给出相对第一名，游戏需要的却是一次有依据的行动。** 本期先做可选的单词口令，不让语音独占操作，也不处理“别向左走”这样的句子。识别到词的声音，不代表理解了否定、说话对象或玩家意图。\n\n这里的 AI 是对音频特征进行分类的神经网络，属于监督机器学习；不是生成式对白，也不是强化学习。状态机负责录音会话与一次操作的边界，游戏规则负责能否移动。推箱寻路仍可用搜索，NPC 行为仍可由行为树安排，两者不需要被语音模型替换。下文场景、分数和代码都是原创教学示例。"
+    },
+    {
+      "heading": "公开工具案例：小词表识别器，不是通用听写",
+      "body": "[TensorFlow.js Speech Commands 的原作者 README](https://raw.githubusercontent.com/tensorflow/tfjs-models/master/speech-commands/README.md) 描述了浏览器内的孤立英语词识别；词表包含未知词和背景噪声类别，分数顺序须与 wordLabels() 对应。它提供流式识别、回调阈值及迁移学习入口。本期依据 master 分支的 2026-11-10 文档快照，未安装软件包或运行模型，不宣称是今日发布的新能力。\n\n[Speech Commands 论文 v1（2018-04-09）](https://arxiv.org/abs/1804.03209) 将关键词检测与完整句子的语音识别区分开。本次核验摘要与版本，未复现论文效果。工具适合帮助探索有限口令；默认英语词表不能直接宣称支持“向左”“放技能”。换成中文或自定义口令，需要相应数据、模型与独立验收。\n\n本期借用这种“命令与非命令共同竞争”的接口思想，先验证接入规则。没有麦克风和训练环境也能完成下述实验，但它不会证明任何真实口令已经识别成功。"
+    },
+    {
+      "heading": "实现顺序：把不行动也写进合同",
+      "body": "1. 限定两个明确口令和一个动作粒度：本例只移动一格。保留屏幕左右按钮。先收集口令、其他词、静音、自己的游戏音效以及外放语音，人工标注是否真的打算下令。\n2. 保存完整标签表和原始分数，按模型输出顺序处理。先在全部类别中选第一，再检查它是否属于允许命令；不要先删掉未知、噪声或其他方向，再把剩余分数重新归一化。\n3. 增加最低分数与同分拒绝；不通过就返回 null。0.75 只是本实验对照点，不是通用可信线，更不能把它解释成“有 75% 把握理解了玩家”。阈值应在独立验证录音上选择。\n4. 将候选交给游戏输入层：检查当前场景、是否处于可移动状态、是否仍是当前录音会话。成功执行一次后结束本次会话；重叠音频窗口不能各走一步。\n5. 最终在未参与训练和调阈值的说话者、录音时段与设备上验收。按整段录音分组，避免同一句切出的相邻窗口同时进入调参与验收。\n\n用真实模型采集验收记录时，别只保存库已经放行的回调：低分和噪声若被提前隐藏，就无法计算完整漏检与拒识。可对固定片段离线推理，或在旁路采样阶段配置返回完整结果，再由自己的决策层计数；正式接入时核对所安装版本的回调语义。"
+    },
+    {
+      "heading": "可运行实验：先保留所有类别，再决定是否移动",
+      "body": "保存为 command-audit.mjs，运行 node command-audit.mjs，无额外依赖。每行是一份独立决策：前六行有真实意图，后六行的 null 表示不该行动。分数全部手写，不是录音或模型输出。\n\n```javascript\n/**\n * @file Audit command rejection with synthetic classification scores.\n * @author liliwei\n * @date 2026-11-10\n * @LastEditors liliwei\n * @LastEditTime 2026-11-10\n */\nexport const labels = ['left', 'right', '_unknown_', '_background_noise_'];\n/** @param {number[]} scores Four normalized scores in labels order. @param {number} threshold Inclusive minimum. @param {boolean} commandOnly Demonstrate the unsafe baseline. @returns {string|null} Command or abstention. */\nexport function decide(scores, threshold, commandOnly = false) {\n  if (!Array.isArray(scores) || scores.length !== labels.length ||\n      !Array.from(scores).every(x => Number.isFinite(x) && x >= 0 && x <= 1) ||\n      Math.abs(scores.reduce((a, b) => a + b, 0) - 1) > 1e-5 ||\n      !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {\n    throw new Error('Invalid scores or threshold');\n  }\n  const candidates = commandOnly ? scores.slice(0, 2) : scores;\n  const best = Math.max(...candidates);\n  if (best < threshold || candidates.filter(x => x === best).length !== 1) return null;\n  const winner = candidates.indexOf(best);\n  return winner < 2 ? labels[winner] : null;\n}\n// Each row is one independent decision; null means no intended command.\nexport const samples = [\n  ['left',  [.90, .04, .04, .02]],\n  ['right', [.03, .90, .04, .03]],\n  ['left',  [.60, .25, .10, .05]],\n  ['right', [.80, .10, .05, .05]],\n  ['left',  [.75, .15, .05, .05]],\n  ['right', [.10, .72, .10, .08]],\n  [null,    [.10, .05, .80, .05]],\n  [null,    [.05, .05, .10, .80]],\n  [null,    [.45, .40, .10, .05]],\n  [null,    [.78, .10, .10, .02]],\n  [null,    [.02, .03, .90, .05]],\n  [null,    [.35, .30, .20, .15]],\n];\n/** @param {number} threshold Inclusive minimum. @param {boolean} commandOnly Unsafe comparison. @returns {object} Counts retaining rejected and wrong commands. */\nexport function audit(threshold, commandOnly = false) {\n  const out = { correct: 0, wrong: 0, rejected: 0, falseTriggers: 0, negatives: 0 };\n  for (const [truth, scores] of samples) {\n    const prediction = decide(scores, threshold, commandOnly);\n    if (truth === null) {\n      out.negatives++;\n      if (prediction !== null) out.falseTriggers++;\n    } else if (prediction === null) out.rejected++;\n    else if (prediction === truth) out.correct++;\n    else out.wrong++;\n  }\n  return out;\n}\nconsole.log('command-only', audit(0, true));\nfor (const threshold of [.50, .75, .90]) console.log(threshold, audit(threshold));\n```\n\n这份简化模型只有四类，不能直接冒充公开工具的完整词表。接入真实识别器时，需要按它的实际标签表遍历全部分数；例如 up 获胜而游戏只接受左右时，也应拒绝，不能把 up 删除后再选。Float32Array 可先转换为普通数组；输入必须是概率型分数，不能拿未归一化 logits 直接套此检查。\n\n本文门槛采用大于等于，同分明确拒绝；它是自定义规则，不照搬库回调的边界。commandOnly=true 只用于复现错误做法，不应作为生产选项。代码没有录音、训练、流式分段或操作去重，后续会话层必须另接。"
+    },
+    {
+      "heading": "实跑结果：阈值更高，也会错过真正的口令",
+      "body": "正文代码在 Node.js v22.16.0 实际运行，得到下表。三列正例合计始终为六；错向与拒绝不能从分母中删掉。\n\n| 决策方式 | 正例正确 | 正例错向 | 正例拒绝 | 非命令误触发 / 6 |\n| --- | --- | --- | --- | --- |\n| 只比较左右，无最低分 | 5 | 1 | 0 | 5 / 6 |\n| 全类别，门槛 0.50 | 5 | 1 | 0 | 1 / 6 |\n| 全类别，门槛 0.75 | 3 | 1 | 2 | 1 / 6 |\n| 全类别，门槛 0.90 | 2 | 0 | 4 | 0 / 6 |\n\n第一种做法仍拒绝一条左右同分的负例，所以误触发是五次。未知类别为 0.80、left 仅 0.10 的那行，完整比较会拒绝，错误做法却会向左。另一方面，负例中 left=0.78 的行在 0.75 下仍被放行：模型若把声音高分判错，阈值不能替它纠正含义。\n\n本次还枚举四类分数按 0.1 递增且总和为 1 的 286 种组合，在四个门槛上与独立排序实现比较，共 1,144 次一致；16 项非法输入检查通过，并检查同分、刚好达标、输入不变及提高门槛不会新增动作。最初手算遗漏了负例的同分拒绝，已按实际输出修正预期，没有改输入迎合数字。\n\n这些只证明决策代码符合约定。0.90 下的 0/6 不能证明真实环境零误触发，也不是推荐选 0.90；正确口令已漏掉四次。选门槛要同时看错误动作和正常玩家需要重说多少次。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：把一次说话绑定到一次输入",
+      "body": "以下是待在工程执行的方案。[Cocos Creator 3.8 LTS 触摸与鼠标事件 API](https://docs.cocos.com/creator/3.8/manual/en/engine/event/event-api.html) 中的触点 getID() 可用于区分发起操作的手指；语音采集仍需浏览器或平台接口，不能把游戏音频播放组件当成录音器。\n\n1. 先接左右按钮到同一个 moveIntent(direction) 入口，再把通过检查的语音候选接入。由规则层检查墙、动画忙碌与回合状态；语音不直接改角色位置。\n2. 显式开启语音后，准备模型与录音资源；按住按钮进入 listening，记录 sessionId 和触点 ID。只接受窗口完全属于本次会话的结果，不能把上次残留的音频算进来。\n3. 接受一次有效移动后转到 consumed，保持到释放；释放、取消触摸、切后台或切场景都结束会话。异步返回必须核对 sessionId；过期结果丢弃，不在下次按住时补发。\n4. 按钮仍可随时使用。关闭语音时停止识别并释放由本功能持有的采集资源；失败只显示简短状态，不阻塞原有玩法。\n\n[MDN 的 getUserMedia 文档](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia) 说明媒体访问需要安全上下文与用户许可，也可能因用户不回应而一直等待。原型应在 HTTPS 或受支持的本地开发环境运行，保留取消入口；已经取消后才完成授权的采集也要清理。不要以为 Promise 尚未拒绝就已经开始录音。\n\nH5 可先验证这条浏览器路径。小游戏的录音、WebAudio 和模型运行环境需按宿主另做适配；原生移动端、PC/主机可复用词表合同、会话状态和验收集，但浏览器库不是这些平台的现成接入保证。公开场所、语音障碍或不方便开口时，普通输入应提供完整体验。"
+    },
+    {
+      "heading": "验收和运行成本：算事件，不只算音频窗口",
+      "body": "| 记录项 | 怎样测 |\n| --- | --- |\n| 口令完成 | 每个有意口令是否在时限内执行正确动作；分开记录错向、拒绝、超时及需要重说 |\n| 无意触发 | 无命令的连续监听期间，实际错误动作数 / 监听小时；按安静、聊天、音效外放分组 |\n| 重复动作 | 一次口令造成多次移动的次数；重叠窗口通过数不等于用户命令数 |\n| 响应时间 | 从预先约定的语音起点或终点到实际移动的 P50/P95；注明起算点，不能只报网络推理耗时 |\n| 设备代价 | 冷启动、稳态推理、游戏帧耗时、内存及耗电，分别测试有无语音功能 |\n\n固定模型与门槛后再跑留出录音。连续负例测试要报告时长、环境、人数与实际事件数；不能把六个手写数组换算成“每小时误触发率”，更不能把相邻窗口当成独立样本堆大数量。若游戏音轨里真的有 left，词分类可能完全正确而玩家并无意图，这要靠交互约束、音轨测试与模型能力共同处理。\n\n首版建议端侧分类、同一页面一个识别实例，只在需要时监听，避免每个角色各开一份模型。延迟包括采集窗口、预处理、推理和会话决策；与渲染争用也要测。本期没有任何设备性能数据。端侧没有逐次云 API 账单，但仍有模型分发、内存、计算和电量成本。缓存键包含模型、标签表和预处理版本；不同版本不能混用，短时语音结果不作为下次指令的缓存。\n\n若改用云端，应另计上传、排队、往返、实际用量费用及并发上限，明确音频处理范围；超时不积压操作，回退到按钮。首次下载失败、权限拒绝、设备不支持或持续超预算时，同样停用语音而保留游戏。本次未采集音频、下载权重或采用第三方声音素材；正式发行前分别核对所用代码、权重和录音的许可，不把公开 README 当成一揽子商用授权。"
+    },
+    {
+      "heading": "25 分钟练习：交一张误触发与漏口令对照表",
+      "body": "1. 4 分钟：选择一个可撤回、低风险的游戏动作，写清两个口令、动作粒度和“不应行动”的情境；没有工程就采用推箱示例。\n2. 6 分钟：运行代码，核对四行统计。手算未知类 0.80 的反例，解释为何先删类别会改变决定。\n3. 5 分钟：把门槛改为 0.80，记录正例正确、错向、拒绝和负例误触发；保留等于门槛的边界。向已有助手提交下面的审阅提示词，或手工回答。\n4. 7 分钟：已有 Cocos/Web 工程就先用假分数接左右输入，验证释放、切场景和重复结果；没有工程就画 listening/consumed/idle 状态及会话编号变化。录音和模型接入标为待测，不临时开启麦克风充当已验收。\n5. 3 分钟：交付原始分数、实际输出、一次高分误判反例、留出录音计划与未测项。下一步再安排真实模型和目标设备试验。\n\n```text\n请审阅我的语音口令决策记录，分数均为手工构造，不是模型实测。\n每行含真实意图、完整标签和分数、门槛、最终动作。\n先核对正例的正确/错向/拒绝是否保留全部分母，再统计非命令误触发。\n指出先过滤类别、重复音频窗口、过期会话可能造成的错误。\n给出两条能推翻“门槛更高就更好”的验收用例。\n不要推断识别率、延迟或商用许可；缺证据的地方写待测。\n```\n\n现在能复用的是拒识规则、对照统计与接入合同。真实语音操控仍是待验证原型；是否值得上线，要由留出录音、实际游戏事件与设备测量共同决定。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "TensorFlow.js Speech Commands：原作者 README，完整词表、分数与识别接口（master，2026-11-10 核验快照；未安装运行）",
+      "url": "https://raw.githubusercontent.com/tensorflow/tfjs-models/master/speech-commands/README.md"
+    },
+    {
+      "title": "Speech Commands: A Dataset for Limited-Vocabulary Speech Recognition（arXiv v1，2018-04-09；本次核验摘要与版本）",
+      "url": "https://arxiv.org/abs/1804.03209"
+    },
+    {
+      "title": "MDN：MediaDevices.getUserMedia，许可、安全上下文和未决请求（Web API 滚动文档，2026-11-10 核验）",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Global and Node Touch and Mouse Events API，触点身份与输入接口",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/engine/event/event-api.html"
+    }
+  ]
+}
