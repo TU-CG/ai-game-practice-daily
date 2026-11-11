@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-11",
+  "tags": [
+    "assets",
+    "testing",
+    "development"
+  ],
+  "title": "让 AI 配乐循环起来：首尾接上了，节拍也要接上",
+  "summary": "AI 生成的营地配乐单听顺耳，循环时却可能爆一下、空一拍。用可运行的采样检查和静音反例，区分波形接缝、音乐结构与平台播放问题；附生成提示词、MusicGen 授权边界、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法；生成模型仅作公开研究案例",
+  "scope": "Cocos Creator 3.8 LTS / Web Audio；小游戏、移动端与 PC/主机可迁移制作和验收流程，播放后端需分别验证",
+  "sections": [
+    {
+      "heading": "场景：营地音乐播第二遍时，玩家听见了接缝",
+      "body": "一款探索游戏想给营地做一段安静、没有明显结尾的背景音乐。AI 生成候选后，单次播放不错；打开循环，末尾却像被切断，或者每隔十几秒突然安静一下。把文件末端淡出只能减小某些突变，也可能让每轮都出现一次“音乐退场”。\n\n本期把问题拆成三层：波形在接点是否突变，节拍与和声是否能接续，以及实际播放后端是否留下间隙。**循环开关只负责重播，不负责把一段音乐改成循环素材。**\n\nAI 在这里是制作期的文本到音乐生成模型，负责提出音色、编配和旋律候选。剪辑、采样统计与播放状态机是普通音频工程，不是强化学习；营地、战斗、暂停之间仍可由既有游戏状态机选择音乐。程序化编曲也能按规则组织音符，它与学习生成音频是不同路线。场景、提示词和下面的数值信号均为原创示例，本次没有生成或试听真实音乐。"
+    },
+    {
+      "heading": "公开案例：MusicGen 能生成候选，许可不能看成一个 MIT",
+      "body": "[MusicGen 官方模型卡](https://raw.githubusercontent.com/facebookresearch/audiocraft/main/model_cards/MUSICGEN_MODEL_CARD.md) 将它描述为音频编码器加自回归 Transformer，可按文本生成音乐，另有旋律引导变体。模型卡标注模型 version 1，训练于 2023 年；这里引用 main 分支在 2026-11-11 核验的说明，属于既有研究案例，不是今日新品，也没有承诺逐采样无缝循环。\n\n采用前必须分开看代码、权重和输入素材。模型卡写明代码 MIT、权重 CC-BY-NC 4.0；[该许可官方摘要](https://creativecommons.org/licenses/by-nc/4.0/) 包含署名与非商业条件。代码许可不能覆盖权重的商业用途；在没有另行明确授权时，不把这套公开权重作为商业游戏的配乐生产方案。输出作品的具体权利也不能仅凭权重标签一概判断。\n\n因此本文借它解释生成流程，不让读者下载权重或把示例音乐入包。商业项目可对已经获准的生成服务或自有音乐使用相同验收步骤，但须保存具体套餐、模型、输入与输出授权依据；“能下载”不是采用批准。本次未下载模型或第三方音频。"
+    },
+    {
+      "heading": "从生成到剪辑：先写循环合同，再挑候选",
+      "body": "先给营地定一个制作目标：120 BPM、4/4 拍、8 小节，没有人声，能容纳玩家停留数分钟。理想长度是 8×4×60÷120＝16 秒；这是节拍网格的目标，不证明生成文件真的遵守了速度。\n\n1. 固定场景情绪、配器、目标节拍和循环用途，先做少量候选。保留提示词、工具/模型版本、可用时的种子、生成参数及授权记录；种子不保证跨版本得到同一文件。\n2. 在音频编辑器确认实际强拍和乐句边界，选一个完整循环区间。不要只把文件裁成 16 秒；若实际速度漂移，先决定编辑修整、采用别的候选，还是放弃这段。\n3. 把选中区间连续拼三遍，重点听两处连接：鼓是否多打一击，贝斯或和弦是否突然换向，混响尾巴是否断掉。需要时在同一节拍网格内处理尾音和过渡，重新检查周期。\n4. 保存无损工作母版、最终导出、采样率、声道数和循环边界。任何重采样、剪辑或压缩后都重新验收最终解码内容，不能沿用旧样本编号。\n\n给已获准的音乐生成工具的原创提示词：\n\n```text\n用途：探索游戏营地的持续背景音乐。\n目标：120 BPM，4/4，8 小节；柔和拨弦、温暖铺底、轻打击乐。\n保持稳定律动与音色，无人声，无开场铺陈、无结束式或淡出。\n乐句末尾应能自然回到开头，避免长独奏和突然加密。\n这些是候选制作目标，不把“loop”字样当作已通过验收。\n```\n\n没有明确的时长或节拍控制接口时，这些数字只是提示意图。可以让多模态助手提出接点候选，但最终强拍、和声和试听结论仍需人工确认。"
+    },
+    {
+      "heading": "可运行检查：测首尾跳变，也看两端是否被静音",
+      "body": "下面检查一个声道的归一化 PCM 数值，范围采用 start 包含、end 不包含。seamJump 是最后一个样本到首样本的幅度差；RMS 是一段样本的均方根幅度，用来提示能量变化。它们不计算节拍、响度标准或音乐质量，也不返回“合格”。\n\n保存为 loop-audit.mjs，运行 node loop-audit.mjs，无依赖。三条 48 kHz、1 秒数值信号只是实验输入：440 Hz 整周期、440.25 Hz 非整周期、以及把整周期信号前后各 100 毫秒置零。没有音频文件输出或播放。\n\n```js\n/**\n * @file Inspect numerical loop boundaries; this does not certify audible quality.\n * @author liliwei\n * @date 2026-11-11\n * @LastEditors liliwei\n * @LastEditTime 2026-11-11\n */\n/** @param {ArrayLike<number>} pcm Mono normalized samples. @param {number} rate Samples per second.\n * @param {number} start Inclusive frame. @param {number} end Exclusive frame.\n * @param {number} edge Frames in each edge window. @returns {object} Boundary and energy measurements.\n */\nexport function inspectLoop(pcm, rate, start = 0, end = pcm?.length, edge = 480) {\n  if (!(Array.isArray(pcm) || pcm instanceof Float32Array || pcm instanceof Float64Array)\n    || !Number.isFinite(rate) || rate <= 0\n    || ![start, end, edge].every(Number.isSafeInteger)\n    || start < 0 || end > pcm.length || edge < 1 || end - start <= 2 * edge) {\n    throw new Error('Invalid loop range');\n  }\n  for (let i = start; i < end; i++) {\n    if (!Number.isFinite(pcm[i]) || Math.abs(pcm[i]) > 1) throw new Error('Invalid PCM sample');\n  }\n  /** @param {number} a Inclusive frame. @param {number} b Exclusive frame. @returns {number} RMS amplitude. */\n  const rms = (a, b) => {\n    let sum = 0;\n    for (let i = a; i < b; i++) sum += pcm[i] * pcm[i];\n    return Math.sqrt(sum / (b - a));\n  };\n  return {\n    seconds: (end - start) / rate,\n    seamJump: Math.abs(pcm[start] - pcm[end - 1]),\n    headRms: rms(start, start + edge),\n    tailRms: rms(end - edge, end),\n    bodyRms: rms(start + edge, end - edge)\n  };\n}\nconst rate = 48000;\n/** @param {number} hz Frequency of a mathematical test signal. @returns {Float64Array} One second of samples. */\nconst tone = hz => Float64Array.from({ length: rate }, (_, i) => .5 * Math.sin(2 * Math.PI * hz * i / rate));\nconst continuous = tone(440), cut = tone(440.25), mutedEnds = tone(440);\nmutedEnds.fill(0, 0, 4800); mutedEnds.fill(0, rate - 4800);\nfor (const [name, pcm] of Object.entries({ continuous, cut, mutedEnds })) {\n  console.log(name, JSON.stringify(inspectLoop(pcm, rate)));\n}\n```\n\nedge=480 在 48 kHz 下是 10 毫秒，只是本例观察窗。真实工程按采样率换算窗口，对左右声道分别检查；先混成单声道可能因反相抵消而掩盖问题。Float PCM 超出本例的 ±1 合同会拒绝，需要另做峰值与导出处理，不应偷偷裁掉异常样本。"
+    },
+    {
+      "heading": "实跑结果：最小的接缝数值，也可能来自空白",
+      "body": "正文代码已在 Node.js v22.16.0 运行。下表保留六位小数，所有数值都是线性幅度，不是分贝，也不是实测听感。\n\n| 输入 | 首尾跳变 | 开头 RMS | 末尾 RMS | 中段 RMS |\n| --- | --- | --- | --- | --- |\n| 整周期 continuous | 0.028782 | 0.356452 | 0.356704 | 0.353491 |\n| 非整周期 cut | 0.499170 | 0.356423 | 0.350415 | 0.353552 |\n| 两端置零 mutedEnds | 0.000000 | 0.000000 | 0.000000 | 0.319438 |\n\n整周期的首尾差并不是零：最后一个样本位于一秒之前一个采样间隔，接回零点正是它的下一步。不能拿“首尾必须完全相等”作为合格线。非整周期示例在连接处出现更大跳变，但仅凭一个差值仍不能给所有音乐判定可听伪影。\n\n两端置零拿到了最小值，却在相邻两轮之间构成 200 毫秒空白，且在静音与有效信号交界处另有突变风险。淡入淡出也要检查是否形成周期性音量起伏。应把指标作为定位线索，再结合波形上下文与拼接试听。\n\n本次另用 243 组五样本输入、三个裁切区间完成 729 次独立参考比较，检查了 15 项非法输入、输入不变、静音与恒定偏置。恒定数值也能取得零跳变，进一步说明这不是音乐质量评分。没有运行生成模型、播放器、Cocos 或真机；这些结果只验证统计代码。"
+    },
+    {
+      "heading": "接到 Cocos / Web：把素材接缝和播放器间隙分开查",
+      "body": "[Cocos Creator 3.8 LTS AudioSource 文档](https://docs.cocos.com/creator/3.8/manual/en/audio-system/audiosource.html) 提供 Clip 与 Loop 属性。首版将审核后的完整循环片段导入 Clip，启用 Loop，用同一个 BGM 播放实例管理进入营地、暂停和退出。不要在 update 中反复 play，也不要把长音乐拆成周期性的 playOneShot 调用。这里是接入方案，本次未在引擎执行。\n\n若最终文件仍包含前奏或尾奏，Cocos 通用 Loop 开关不等于本文自定义的区间元数据；最容易迁移的办法是先导出独立循环文件。需要保留整段并按区间循环时，再实现并验证对应后端，而不是假定导出工具写下的标记会自动生效。\n\n独立 H5 音频层可参考 [Web Audio 的 loop 行为](https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/loop)：到 loopEnd 后回到 loopStart。可把审核过的样本边界除以实际 AudioBuffer.sampleRate 得到秒；若解码发生重采样，须用解码后数据重新确定边界。交给音频后端循环，不用每 16 秒一次的 JavaScript 定时器重启。该接口不保证素材的和声或节拍连续。\n\n排查顺序是：先拼三遍无损母版，再循环最终导出，最后在目标游戏包内播放。如果母版已经断拍，修素材；若母版正常而发布版出现空隙，检查编码、解码、循环区间和后端行为。小游戏、原生移动端及 PC/主机可复用母版和验收表，但各自音频后端必须实测，不能用桌面浏览器的一次通过替代。"
+    },
+    {
+      "heading": "验收和成本：按可用片段计收益，不按生成数量计",
+      "body": "| 验收项 | 留下什么记录 |\n| --- | --- |\n| 接缝 | 最终解码数据的每声道测量、拼接位置、人工听到的突变或静音 |\n| 音乐连续 | 连续循环至少十轮，记录重拍重复/缺失、和声跳变及音量周期起伏 |\n| 游戏内体验 | 开始、暂停恢复、切后台、重进场景；是否重复播放或失去音乐 |\n| 制作收益 | 最终批准片段数、总生成等待、剪辑与复审时间、实际服务费或本地算力成本 |\n\n不要把三条数学信号换算为模型通过率。对比人工旧素材时使用同一播放设备和近似响度，注明试听条件；阈值和能量窗口要针对内容校准。接缝合格也不能保证循环十分钟不疲劳。\n\n本方案把 AI 留在制作期：可以在获准的本地环境或云服务生成，玩家端只播放文件。记录单任务冷启动、生成耗时和峰值资源，先小批量串行；云端超时先查询原任务，避免重复计费。缓存候选时包含模型、提示词、参数、输入及授权版本。没有逐玩家模型推理延迟或 API 费，但仍有下载、解码、播放负载和内存成本；本期没有设备性能数字。\n\n以解码为 Float32、48 kHz、双声道、16 秒为假设，仅 PCM 数据就是 48000×2×16×4＝6,144,000 字节，约 5.86 MiB；这不等于压缩包体，也不含后端额外缓冲。目标设备另量首次可播放时间与峰值内存，避免同时保留多份不用的解码缓冲。下载失败或新素材未通过验收时，继续使用已有获准配乐；不让玩家等待实时生成。"
+    },
+    {
+      "heading": "25 分钟练习：交一个接点，也交出不能证明的部分",
+      "body": "1. 4 分钟：为一个营地或菜单写节拍、小节数与用途，计算目标时长。选自有或已获准的音乐；没有素材就只做数值练习，不临时把研究权重当商用工具。\n2. 6 分钟：运行代码，核对三行输出；手算为什么两端各 100 毫秒静音会在循环处拼成 200 毫秒。把 edge 改成 240，记录窗口变化。\n3. 7 分钟：有素材时在编辑器选完整乐句，拼三遍，标注一个波形问题与一个节拍/和声问题；没有素材就写验收表，把试听项标为待做。\n4. 5 分钟：已有 Cocos/Web 工程才接入审核片段，循环并暂停恢复；没有工程就记录 Clip、Loop、音频版本与唯一播放实例的合同。不要把纯数值通过写成真机通过。\n5. 3 分钟：交付提示词或制作目标、边界记录、实际测量、授权依据和未测项。下一步只修一个明确问题，再用同一段回放复验。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "MusicGen 官方模型卡：模型 version 1、生成方式及代码/权重许可（main，2026-11-11 核验；未运行模型）",
+      "url": "https://raw.githubusercontent.com/facebookresearch/audiocraft/main/model_cards/MUSICGEN_MODEL_CARD.md"
+    },
+    {
+      "title": "Creative Commons：CC BY-NC 4.0 官方许可摘要，署名与非商业条件（2026-11-11 核验）",
+      "url": "https://creativecommons.org/licenses/by-nc/4.0/"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：AudioSource 组件、Clip 与 Loop（2026-11-11 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/audio-system/audiosource.html"
+    },
+    {
+      "title": "MDN：AudioBufferSourceNode.loop，循环开始和结束位置（Web API 滚动文档，2026-11-11 核验）",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/loop"
+    }
+  ]
+}
