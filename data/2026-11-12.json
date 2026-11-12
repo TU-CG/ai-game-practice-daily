@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-12",
+  "tags": [
+    "content",
+    "design",
+    "development"
+  ],
+  "title": "让 AI 拼环形地砖：邻接规则没报错，整圈仍可能无解",
+  "summary": "AI 给出两色交替的机关地砖方案，每条邻接看似合理，三格闭环却拼不出来。用可运行的约束传播实验，分清尚未发现冲突、找到完整解与玩法可用；附 WFC 公开案例、规则提示词、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法；运行时生成属待验证方案",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏；离线规则流程可迁移至移动、PC/主机",
+  "sections": [
+    {
+      "heading": "场景：三块地砖围成环，红蓝必须交替",
+      "body": "一款遗迹解谜游戏需要围绕祭坛铺设能量地砖。策划允许红 R、蓝 B 两种符号，要求所有相邻地砖颜色不同，最后一格也必须接回第一格。三格环看上去很小：每格都能选红或蓝，单看任何一对邻居也能配出合法组合，拼完整圈却会失败。\n\n本期让生成式助手起草符号、邻接表和变化方案，再用确定性程序检查。**“没有发现矛盾”不等于“已经找到完整解”；找到完整解也不等于机关好玩。** 三格矛盾是本文故意构造的反例，不是某款模型实际输出，也不是某个商业游戏的事故。本次未额外调用外部模型。\n\n生成式 AI 负责候选设计；约束传播与搜索属于传统符号方法，程序化生成负责组装内容，没有训练奖励或神经网络推理。机关激活仍可由状态机处理，NPC 行为树另管行动。这个小环人工即可解，练习价值是为多地块、多方向的 AI 设计表建立可检查的接口。"
+    },
+    {
+      "heading": "公开案例：WFC 的传播阶段做了什么",
+      "body": "[Maxim Gumin 的 WaveFunctionCollapse 原作者说明](https://raw.githubusercontent.com/mxgmn/WaveFunctionCollapse/master/README.md) 将 simple tiled model 的传播描述为邻接约束传播；完整生成流程还包含选择位置、确定一个候选，再传播。候选被全部排除时会遇到矛盾。本文核验的是 master 分支 2026-11-12 文档快照，不声称它是今天发布的新版本。\n\n[Karth 与 Smith 的 FDG 2017 论文](https://pcgworkshop.com/archive/karth2017wavefunctioncollapse.pdf) 从约束求解角度解释 WFC，并指出传播器本身不构成完整求解器。下面借这个分工做一个两色环实验：只传播，不实现熵排序、概率采样、回溯或完整 WFC，也没有运行原作者项目。\n\n采用现成代码时，[仓库 MIT LICENSE](https://raw.githubusercontent.com/mxgmn/WaveFunctionCollapse/master/LICENSE) 要求保留相应版权与许可声明，并特别说明提供的示例图片和地块不属于该软件许可范围。因此不能把演示图集直接当作已获商用授权的素材。本期只使用原创文字符号，没有下载图片、权重或第三方美术。"
+    },
+    {
+      "heading": "先让 AI 写规则表，再决定哪些约束可以改",
+      "body": "把三件事分开记录：每格允许哪些地砖、哪些格互为邻居、怎样的一对地砖可以相邻。本例每格候选为 R、B 或两者；拓扑是闭环；兼容条件为颜色不同。三格环有 0–1、1–2、2–0 三条边，不能漏掉最后一条。\n\n1. 作者先冻结玩法硬条件和可商量项，例如“必须闭环”是硬条件，“格数”允许从三改为四。生成式助手可提符号、变体与规则解释，但不能自行取消闭环来交作业。\n2. 将候选转成有限 ID 和显式规则，检查重复 ID、未知引用、方向及数量上限。二维地块还要区分东、西、南、北；旋转后重新核对接口，不靠名字猜兼容性。\n3. 运行传播，输出 solved、contradiction 或 unresolved。只有每格剩一个候选且满足规则，才得到本例的完整解；unresolved 要继续选择与搜索，不能随机取每格第一项就发布。\n4. 留下失败输入和已作选择。某条分支矛盾只证明该分支无法完成；全部相关分支穷尽后才可宣称无解。超时或达到重试上限应标“未求得解”，不能当作无解证明。\n\n可复制给已有助手的原创提示词：\n\n```text\n为遗迹机关起草地砖规则，输出 JSON，不生成图片或执行代码。\ntiles 只能是 R、B；相邻颜色必须不同；拓扑是闭环。\n先分析 n=3，再提出一个 n=4 的完整候选。\n输出字段：n、domains、assignment、reason、changedConstraints。\n无完整解时 assignment=null，不得偷偷删去末格到首格的边。\nn 允许调整；闭环与异色邻接不允许调整。\n逐条列出完整候选的每条边，不能只说“满足约束”。\n给定求解器反馈时，只提出有依据的修改，不改测试期望值。\n```\n\n助手的解释用于审阅，验收仍由独立规则完成。实际批量任务先限制为一份候选、一次反馈；记录真正返回内容。本期没有测量提示词成功率。"
+    },
+    {
+      "heading": "可运行实验：删除没有相邻支持的候选",
+      "body": "用 RB 表示“尚可选红或蓝”，它不是一种紫色地砖。对每格的每个颜色，检查左右邻居是否各有一个不同颜色可选；没有支持就删除。反复执行直到不再变化。每次变化只删除候选，因此这个有限域程序会停止。\n\n保存为 ring-audit.mjs，用 node ring-audit.mjs 运行，无依赖。3–64 格是教学输入限制，不是推荐的地图尺寸或性能预算。\n\n```javascript\n/**\n * @file Propagate two-color adjacency rules on a closed tile ring.\n * @author liliwei\n * @date 2026-11-12\n * @LastEditors liliwei\n * @LastEditTime 2026-11-12\n */\n/**\n * Remove colors lacking support in either neighbor; do not search.\n * @param {string[]} input Each domain is R, B or RB; 3 to 64 cells.\n * @returns {{status:string, domains:string[]}} A new domain snapshot.\n */\nexport function propagate(input) {\n  if (!Array.isArray(input) || input.length < 3 || input.length > 64 ||\n      Array.from(input).some(x => !['R', 'B', 'RB'].includes(x))) {\n    throw new TypeError('Expected 3 to 64 nonempty R/B domains');\n  }\n  const d = [...input], n = d.length;\n  let changed = true;\n  while (changed) {\n    changed = false;\n    for (let i = 0; i < n; i++) {\n      const neighbors = [(i + n - 1) % n, (i + 1) % n];\n      const kept = [...d[i]].filter(color => neighbors.every(j =>\n        [...d[j]].some(other => other !== color))).join('');\n      if (kept !== d[i]) { d[i] = kept; changed = true; }\n      if (!kept) return { status: 'contradiction', domains: d };\n    }\n  }\n  return { status: d.every(x => x.length === 1) ? 'solved' : 'unresolved',\n    domains: d };\n}\n\nconst cases = {\n  oddOpen: ['RB', 'RB', 'RB'],\n  oddPinned: ['R', 'RB', 'RB'],\n  evenOpen: ['RB', 'RB', 'RB', 'RB'],\n  evenPinned: ['R', 'RB', 'RB', 'RB']\n};\nfor (const [name, domains] of Object.entries(cases)) {\n  console.log(name, JSON.stringify(propagate(domains)));\n}\n```\n\n返回的是新数组，输入不变；空字符串表示该格候选被清空，程序立即返回 contradiction。其余格可能尚未完成传播，因此这份失败快照不是最小冲突解释，也不能当最终地图。固定扫描顺序用于重放，不包含随机性。"
+    },
+    {
+      "heading": "本次实跑：传播停住时，可能有两个解，也可能一个都没有",
+      "body": "代码已在 Node.js v22.16.0 运行。另用独立穷举器枚举每个环的全部完整红蓝赋值，逐边检查，得到下表；完整解数量不是传播器自己算出来的。\n\n| 输入 | 传播状态 | 返回候选 | 独立穷举的完整解数 |\n| --- | --- | --- | --- |\n| 三格，全为 RB | unresolved | RB、RB、RB | 0 |\n| 三格，第一格固定 R | contradiction | R、B、空 | 0 |\n| 四格，全为 RB | unresolved | RB、RB、RB、RB | 2 |\n| 四格，第一格固定 R | solved | R、B、R、B | 1 |\n\n为什么第一行不报错？第一格选 R 时，每个邻居各自都有 B；选 B 时，邻居各自都有 R。局部检查保留了全部候选，却没要求两位邻居的选择在它们互相连接时也能共同成立。固定第一格为 R 后，另外两格都被迫选 B，而它们之间还有一条异色边，于是出现矛盾。固定为 B 也会失败；本例两条起始分支覆盖全部选择。\n\n对三至六格，每格取 R、B、RB 三种初始域，共检查 3³+3⁴+3⁵+3⁶＝1,080 组。传播前后的完整解集合逐组一致，没有删掉合法解；同时核对 solved 的唯一解、矛盾时的零解、输入不变、固定点幂等性以及 12 项非法输入。有两组停在 unresolved 却无解，正是三格和五格的全开放环。\n\n这些结果只覆盖两色异邻闭环，不证明二维 WFC 的正确性、模型设计质量或生成速度。二维地图还可能存在所有局部接口正确、出生点却到不了出口的情况；需要单独的全局可达性、机关顺序与人工试玩验收。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：先发布批准的布局，再考虑运行时求解",
+      "body": "首版把 AI 提案与求解都放在制作期。导出规则版本、拓扑、已确定的 tileIds、素材映射版本和验收结果，游戏只消费批准的完整布局。[Cocos Creator 3.8 LTS JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 支持以 JsonAsset 导入，并通过 json 属性读取；这只提供数据入口，不替你验证规则。\n\n1. 将逻辑 ID 与 SpriteFrame 或 Prefab 映射分开，先用两个自有色块展示环。加载后验证长度、ID 和所有邻接边，再实例化；不把 unresolved 的 RB 当成实际地砖。\n2. 闭环布局可按编号均匀排在圆周，逻辑连接来自拓扑数据，不能用屏幕距离推断。若迁移到二维网格，明确边界是否环绕、是否允许对角连接以及旋转方向。\n3. 机关控制器使用正式规则处理点亮、重置和胜利；生成器只决定初始布局。碰撞、导航与任务标记另外验证，不因地砖颜色合法就默认可通关。\n4. 缺文件、未知 ID 或校验失败时载入已审核备用布局，留下规则与构建版本。PC/主机、移动和小游戏均可复用这份数据合同，具体资源加载和交互仍在对应平台实测。\n\n以上是尚未在 Cocos 或真机执行的接入方案。离线导出最适合先试的 H5/小游戏项目：没有运行时模型延迟或逐玩家 API 费；制作侧仍要记模型调用、审核和求解耗时，并按最终批准布局计算投入。"
+    },
+    {
+      "heading": "验收与运行预算：失败也要占一个记录位置",
+      "body": "| 检查层 | 应保留的证据 |\n| --- | --- |\n| 规则表达 | AI 原提案、人工批准版本、拓扑、边界和允许修改项 |\n| 完整赋值 | 每格唯一 ID、逐边合法性；将冲突、超时、未完成分开计数 |\n| 全局玩法 | 出生点到出口、必经机关、资源数量；使用独立规则或回放检查 |\n| 内容价值 | 不同布局数、人工接受数、返工原因；重复候选先去重 |\n| 成本 | 全部尝试的调用费、求解时间、人工时间，以及批准布局数量 |\n\n若以后试运行时生成，优先让端侧求解器消费已审核规则，云端模型不参与即时落地。可在加载阶段安排单个生成任务，限制搜索节点数与墙钟时间；达到预算就切换备用图。浏览器可考虑 Worker，但仍要测通信、峰值内存和长帧；小游戏另核对宿主能力。本文没有给出未经测量的“几毫秒生成整图”承诺。\n\n如确需云端生成新规则，另记网络、排队、模型和校验的全链路延迟、实际用量费用与失败次数，设置单局请求上限，玩家不等待失败请求继续重试。云端候选通过检查前不得改变进行中的关卡。\n\n缓存键至少包含规则、地块集、拓扑、固定格与求解器版本；使用随机选择时还记录种子和选择顺序。种子本身不能保证跨版本重现。备用布局也必须适配当前规则。运行时动态改规则属于实验方案，不由这次 1,080 组离线检查证明可上线。"
+    },
+    {
+      "heading": "25 分钟练习：交付一个失败环和一个批准布局",
+      "body": "1. 4 分钟：画三格闭环，手工标出全部三条边，写清可改格数、不可改闭环和异色邻接。指出为什么只画一条直线会掩盖问题。\n2. 6 分钟：运行代码，保存四行真实输出。把三格第一项改为 B，确认另一条选择分支同样失败；把环改成五格，再试一次。\n3. 5 分钟：向已有助手提交提示词和反馈，或手工给出四格方案并注明。审阅它是否删边、加第三种颜色或把 unresolved 写成成功。\n4. 7 分钟：已有 Cocos/Web 工程时，用自有红蓝色块展示批准的四格布局，故意导入一个非法 ID 检查回退。没有工程就完成表格与逐边审阅，把运行态列为待测。\n5. 3 分钟：交付规则 JSON、一次冲突快照、一份完整赋值和未覆盖项。用一句话区分“传播没找出问题”“确有完整解”和“实际玩法已验收”。\n\n本期可直接复用的是提案—规则—传播—搜索—独立验收的制作流程。小环不是完整地图生成器；先把状态说准确，再扩展到真正需要自动化的地块集合。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "WaveFunctionCollapse 原作者 README：simple tiled model 与观察/传播（master，2026-11-12 核验快照）",
+      "url": "https://raw.githubusercontent.com/mxgmn/WaveFunctionCollapse/master/README.md"
+    },
+    {
+      "title": "Karth & Smith：WaveFunctionCollapse is Constraint Solving in the Wild（FDG 2017，传播与完整求解的区别）",
+      "url": "https://pcgworkshop.com/archive/karth2017wavefunctioncollapse.pdf"
+    },
+    {
+      "title": "WaveFunctionCollapse MIT LICENSE：代码条件及示例图像排除项（master，2026-11-12 核验）",
+      "url": "https://raw.githubusercontent.com/mxgmn/WaveFunctionCollapse/master/LICENSE"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-12 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
