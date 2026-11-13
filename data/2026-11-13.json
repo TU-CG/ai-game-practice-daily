@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-13",
+  "tags": [
+    "gameplay",
+    "testing",
+    "development"
+  ],
+  "title": "让 AI 模仿高手走位：偏离路线后，也要学会回来",
+  "summary": "只看高手沿中线行走，NPC 可能学会不转向，却不会在被推开后回到路线。用真正拟合的一参数策略演示数据聚合：让学习器走、让老师给纠正标签，再用未参与训练的扰动验收。附 DAgger 公开工具案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 原创教学实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏；制作期模仿学习，端侧策略接入方案",
+  "sections": [
+    {
+      "heading": "场景：示范每一步都对，NPC 被推开后却回不来",
+      "body": "一款俯视角护送游戏想让小机器人模仿测试员走位。示范里，测试员一直沿中线前进，没有横向操作。模型照着学，在同样的记录上动作误差为零；真正运行时被机关横推一下，它仍不修正，直到这一段结束。\n\n**示范描述“老师走到了哪里”；上线后要处理的，是学习器自己走到的状态。** 本期把这个差距缩成一个可手算实验：只研究横向纠偏，不做完整护送玩法，也不把无扰动样本上的零误差叫作通关能力。\n\n这里是监督式模仿学习：用状态与专家动作拟合控制策略。没有通过奖励优化策略，不是强化学习；也不是生成式模型或预测下一状态的世界模型。路线搜索先决定去哪儿，状态机或行为树管理巡逻、受击与停止，学习策略只提供允许移动时的横向动作。场景、数据和代码均为原创；未复现商业游戏，也未训练神经网络。"
+    },
+    {
+      "heading": "公开方法：DAgger 收集学习器遇到的状态，再请老师标动作",
+      "body": "[Ross、Gordon 与 Bagnell 的 AISTATS 2011 论文](https://proceedings.mlr.press/v15/ross11a/ross11a.pdf) 提出 DAgger（数据聚合）。其算法 3.1 反复采集当前策略访问的状态，取得专家动作标签，加入既有数据后重新训练，再在验证中选策略。它处理的是行动改变后续观察分布的问题；论文结论有前提，不等于加一次数据就保证成功。\n\n[HumanCompatibleAI 的 imitation 工具文档](https://imitation.readthedocs.io/en/stable/algorithms/dagger.html) 提供 DAggerTrainer 与 SimpleDAggerTrainer：采集时可混合专家和学习器控制，但保存的监督目标仍是专家动作；训练使用累计数据。本文核验 stable 滚动文档于 2026-11-13，未安装该库，不冒充某个包版本的实测结果。这是长期方法与既有工具介绍，不是今日新品新闻。\n\n下面只演示一次“学习器回放—专家标注—合并拟合”。老师是明确的纠偏规则，不是大语言模型：没有理由相信聊天模型能给连续运动提供精确动作真值。正式项目的老师可以是可靠控制器或能观察当前状态的测试员；离线补标必须保留足够上下文。"
+    },
+    {
+      "heading": "先固定合同：观察、真正执行的动作和老师标签分开存",
+      "body": "教学环境每段 8 个离散逻辑步，横向误差 e 用游戏单位表示。每步先加入外部推力，再观察 e，执行动作 a，得到下一误差 e+a；动作限制在 −1 到 1。没有惯性、墙或速度状态，不能把这些单位直接当米/秒。\n\n老师在 |e|≤0.25 时不动作，否则朝中线修正，单步最多 1。学习器的形式固定为 a=clip(−k×e)，拟合未截断输出与老师标签的平方误差，再在执行时限幅。k=−Σ(e×a)/Σ(e²)；当所有 e 都为零时，数据无法辨认纠偏强度，本例明确默认 k=0。\n\n1. 初始示范是 6 条 e=0、a=0。重复录相同的直行，不会提供被推开后怎样恢复的信息。\n2. 冻结初始策略，让它分别经历 +2、−2 的单次推力，各走 6 步。推力发生在索引 2；之后不再施力，学习器自己控制。\n3. 对每个实际访问状态询问老师。保存 e、学习器实际动作、老师标签、下一状态与轮次；不能把老师标签伪装成当时执行的动作。\n4. 将 12 条新标签与原 6 条合并拟合，冻结新 k。另用 ±0.5、±1、±1.5 六种扰动各回放 8 步，这些轨迹不加入训练；持续侧风作为额外压力检查。\n\n真实项目还应按整条轨迹、地图或测试员划分训练与验收，保留独立最终测试。看过错误后继续改模型，就需要新留出集。本例只有预先设定的确定性玩具场景，没有独立玩家或新地图泛化证据。"
+    },
+    {
+      "heading": "可运行实验：只拟合一个数，也能看到数据覆盖的作用",
+      "body": "保存为 recovery.mjs，运行 node recovery.mjs，无依赖。程序实际计算两次 k 并回放策略，不调用外部服务。输入上限只是教学防误用，不是性能预算。\n\n```js\n/**\n * @file Fit a toy imitation policy and audit recovery after disturbances.\n * @author liliwei\n * @date 2026-11-13\n * @LastEditors liliwei\n * @LastEditTime 2026-11-13\n */\n/** @param {number} x Raw action. @returns {number} Action limited to one unit. */\nexport function clip(x) { return Math.max(-1, Math.min(1, x)); }\n/** @param {number} e Lateral error. @returns {number} Expert correction. */\nexport function expert(e) { return Math.abs(e) <= 0.25 ? 0 : clip(-e); }\n/** @param {Array<{e:number,a:number}>} rows Expert labels. @returns {number} Least-squares gain. */\nexport function fit(rows) {\n  if (!Array.isArray(rows) || !rows.length || rows.length > 10000) throw Error('Invalid rows');\n  let xy = 0, xx = 0;\n  for (const r of rows) {\n    if (!r || !Number.isFinite(r.e) || Math.abs(r.e) > 100 ||\n        !Number.isFinite(r.a) || Math.abs(r.a) > 1) throw Error('Invalid label');\n    xy += r.e * r.a; xx += r.e * r.e;\n  }\n  return xx === 0 ? 0 : -xy / xx;\n}\n/** @param {number} k Learned gain. @returns {(e:number)=>number} Frozen policy. */\nexport function policy(k) {\n  if (!Number.isFinite(k)) throw Error('Invalid gain');\n  return e => clip(-k * e);\n}\n/** @param {Function} act Controller. @param {number[]} pushes Pre-action disturbances.\n * @returns {Array<{e:number,a:number,next:number}>} Actual controller trajectory. */\nexport function rollout(act, pushes) {\n  if (typeof act !== 'function' || !Array.isArray(pushes) ||\n      !pushes.length || pushes.length > 1000) throw Error('Invalid rollout');\n  let x = 0; const trace = [];\n  for (const push of pushes) {\n    if (!Number.isFinite(push) || Math.abs(push) > 10) throw Error('Invalid push');\n    const e = x + push;\n    if (Math.abs(e) > 100) throw Error('State out of range');\n    const a = act(e);\n    if (!Number.isFinite(a) || Math.abs(a) > 1) throw Error('Invalid action');\n    x = e + a; trace.push({e, a, next:x});\n  }\n  return trace;\n}\n/** @param {number} value Impulse. @param {number} n Steps. @returns {number[]} Push at index 2. */\nexport function kick(value, n = 8) { return Array.from({length:n}, (_, t) => t === 2 ? value : 0); }\nconst demos = Array.from({length:6}, () => ({e:0, a:0}));\nexport const k0 = fit(demos);\n// Expert labels the learner's visited states; it does not execute these actions.\nconst visited = [-2, 2].flatMap(v => rollout(policy(k0), kick(v, 6)));\nconst labeled = visited.map(r => ({e:r.e, a:expert(r.e)}));\nexport const k1 = fit([...demos, ...labeled]);\nexport const cases = [-1.5, -1, -0.5, 0.5, 1, 1.5].map(v => kick(v));\n/** @param {Function} act Controller. @param {number[][]} inputs Episodes.\n * @returns {object} Endpoint and post-action error metrics. */\nexport function score(act, inputs) {\n  const runs = inputs.map(p => rollout(act, p));\n  const errors = runs.flatMap(r => r.map(s => Math.abs(s.next)));\n  return {episodes:runs.length, recovered:runs.filter(r => Math.abs(r.at(-1).next) <= 0.25).length,\n    meanError:errors.reduce((a,b) => a+b, 0)/errors.length,\n    maxFinalError:Math.max(...runs.map(r => Math.abs(r.at(-1).next)))};\n}\nconsole.log(JSON.stringify({k0, k1, trainingRows:demos.length+labeled.length,\n  before:score(policy(k0),cases), after:score(policy(k1),cases),\n  wind:score(policy(k1),[Array(8).fill(0.5)]), expertWind:score(expert,[Array(8).fill(0.5)])}));\n```\n\nlabeled 使用的是 expert(r.e)，不是 r.a；回放的下一步则来自学习器实际动作。这两个字段混淆，就会把学习器自己的错误重复当答案。这里保留重复访问作为样本权重；生产数据中重复停滞可能淹没少见状态，需要记录采样与加权方式，并重新验收。"
+    },
+    {
+      "heading": "本次实跑：单次推开能恢复，持续侧风仍暴露不足",
+      "body": "正文代码已在 Node.js v22.16.0 运行。初始 k=0，合并后的 18 条数据拟合 k=0.5；6 条原始直行示范上的动作误差，前后都是零。将直行示范单独重复到 600 条，仍拟合为零。\n\n下表“恢复”仅指最后一步动作后 |e|≤0.25，不代表全程不偏航或护送通关；平均误差统计所有步骤动作后的绝对误差，包括受扰前的零值。\n\n| 策略与情境 | 末步恢复 / 段数 | 平均绝对误差 | 最大末步误差 |\n| --- | --- | --- | --- |\n| 初始策略，六种单次推力 | 0 / 6 | 0.750000 | 1.500000 |\n| 聚合后策略，同六种推力 | 6 / 6 | 0.123047 | 0.023438 |\n| 聚合后策略，每步 +0.5 侧风 | 0 / 1 | 0.437744 | 0.498047 |\n| 规则老师，同样持续侧风 | 1 / 1 | 0.000000 | 0.000000 |\n\n例如 +1.5 推力后的误差依次为 0.75、0.375、0.1875、0.09375、0.046875、0.0234375，三次动作后进入教学容差。持续侧风时，每步都重新推开，k=0.5 的策略逐渐停在约 0.5 的动作后误差；老师却能直接抵消本例侧风。下一轮可采集这类状态再拟合，也可调整策略表示，但必须重新评估，不能只删掉失败行。\n\n另外用解析式核对了 33 种推力、10 种轨迹长度，共 330 段；检查限幅、输入不变和 14 项非法输入。数字只证明这个一维实验与实现一致，不是神经网络、真实 NPC 或玩家体验的成绩。\n\n本例老师很便宜，直接采用规则通常更合理。它的价值是演示数据采集缺口；只有动作更复杂、示范有额外价值且收益经过测量时，才值得升级到学习策略。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：制作侧采集训练，端侧只运行冻结策略",
+      "body": "先在已有工程旁路记录观测和建议，不让新策略接管。待回放通过，再由移动控制入口接收动作；碰撞、受击和技能锁定仍由正式规则裁定。以下是待在 Cocos 和真机验证的方案：\n\n1. 定义相对路线的横向误差、朝向、速度等真实特征，以及动作的时间单位。若存在惯性，只观察 e 可能不够；同一位置、不同速度需要不同修正。采集必须对齐逻辑步，不能把变动的渲染帧当固定训练间隔。\n2. 制作侧运行学习器并保存实际轨迹，在允许的测试范围补标；遇到老师也不能恢复的状态，另标失败或重置，不编造“正确动作”。保留老师接管率，不能让接管掩盖学习器的失败。\n3. 训练完成后导出 policyVersion、featureVersion、动作范围、逻辑步长和参数。可按 [Cocos Creator 3.8 LTS JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 导入 JsonAsset，通过 json 属性读取；加载时验证字段与版本，不能直接执行模型生成的代码。\n4. 本例端侧只需乘法和限幅。正式控制器统一应用动作，NPC 停止、受击或切场景时清除旧意图。保留规则控制器作基线和降级，不让两套控制同时改位置。\n5. Web/H5、小游戏、移动及 PC/主机都能迁移观测—动作合同与离线采集方式；神经模型的推理库、包体和后端另选另测，不把这个 JavaScript 小实验当作跨端性能证明。\n\n所有数据和规则均为原创数字，没有采用外部角色素材、录音或模型权重。若换成人类示范，须先取得允许的采集与使用范围；公开研究仓库也不自动替游戏资产授权。"
+    },
+    {
+      "heading": "验收与预算：既算恢复能力，也算老师和运行时的成本",
+      "body": "| 维度 | 如何记录 |\n| --- | --- |\n| 连续行为 | 每段末步恢复、首次进入容差所需步数、之后再偏离次数；另报全程最大偏差和碰撞 |\n| 数据覆盖 | 按地图、扰动方向与强度、速度分组；列整段数量，不把连续帧当独立玩家 |\n| 教师投入 | 查询次数、人工标注时长、争议标签、接管与重置数；训练和最终验收隔开 |\n| 对照收益 | 同一扰动比较旧策略、新策略和规则老师；保留失败，检查是否值得替换基线 |\n| 执行成本 | 特征采集、推理、动作应用的 P50/P95，模型加载、内存及多 NPC 总开销 |\n\n本方案离线训练、端侧推理，无逐动作云 API 费用；仍有制作、标注与设备计算成本。首次集成按固定逻辑频率运行，并设置单帧 NPC 推理数量上限，用目标设备回放决定预算，本文不承诺几毫秒或帧率提升。\n\n缓存冻结参数时包含模型、特征和控制规则版本；动作结果依赖当前状态，不因上一帧“差不多”就复用。版本不匹配、数值异常或超时后，由已批准的规则控制器接管；端侧不会用，不能临时改成每帧请求云模型。\n\n若以后探索云端策略，将网络、排队和推理一起计延迟，限制在途请求、拒绝旧逻辑步回包，统计实际用量费用；断网立即走本地控制。本期不推荐把即时纠偏依赖于公网。大规模神经模仿与在线更新仍是实验方案，本轮只验证了数据聚合的最小例子。"
+    },
+    {
+      "heading": "25 分钟练习：交一条恢复轨迹，也交一条失败轨迹",
+      "body": "1. 4 分钟：手画中线与一次横推，写清观测时刻、动作单位和恢复容差。解释为什么全是 e=0 的示范无法确定 k。\n2. 6 分钟：运行代码，保存两个 k 与四行结果。手算 +1.5 的前三次纠偏，确认专家标签没有被当作已执行动作。\n3. 5 分钟：把只含直行的示范重复 100 倍，再跑持续侧风。向已有助手提交下方提示词，或手工审阅并注明；不要改完容差就宣布模型改善。\n4. 7 分钟：已有 Cocos/Web 工程时，用两个自有色块表示中线和机器人，先回放误差，再接旁路动作日志。没有工程就交轨迹表，把物理与运行态检查列为待测。\n5. 3 分钟：保存训练数据、策略参数、留出扰动和失败记录，写下下一轮要采集的状态，以及继续使用规则控制器的条件。\n\n可复制给已有编程助手的审阅提示词；它不参与专家标注：\n\n```text\n审阅这份 NPC 模仿学习实验，输入为代码、真实输出、采集和验收清单。\n逐项指出：\n1. 观测是否来自学习器实际轨迹？专家标签与执行动作有没有混淆？\n2. 哪些状态未覆盖？同一观测是否可能因速度或历史不同而需要不同动作？\n3. 验收是否混入训练？接管、重置或失败是否被移出分母？\n4. 持续侧风失败支持什么结论，不能支持什么结论？\n只引用输入中的证据；缺少性能、玩家或引擎数据时标为待测。\n不要修改验收容差，不要补写不存在的模型成绩。\n```\n\n交付物是一份可复查的数据—策略—轨迹记录。可复用的是采集学习器状态、补可靠标签和闭环验收的方法；是否采用学习控制，仍要由它相对现有规则的实际收益决定。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Ross、Gordon、Bagnell：DAgger，AISTATS 2011，PMLR 15:627–635；核验算法 3.1（非当日新闻）",
+      "url": "https://proceedings.mlr.press/v15/ross11a/ross11a.pdf"
+    },
+    {
+      "title": "HumanCompatibleAI imitation：DAgger API，stable 滚动文档，2026-11-13 核验；本期未安装该库",
+      "url": "https://imitation.readthedocs.io/en/stable/algorithms/dagger.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源、JsonAsset 与 json 属性（2026-11-13 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
