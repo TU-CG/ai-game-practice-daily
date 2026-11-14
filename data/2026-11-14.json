@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-14",
+  "tags": [
+    "performance",
+    "development",
+    "testing"
+  ],
+  "title": "把 AI 模型压成 8 位：别让量化抹平 NPC 的选择",
+  "summary": "模型体积缩小后，NPC 也可能换了目标。用可运行的 8 位量化实验，观察范围截断与精度损失如何改变选择，再建立质量、加载和真机耗时三道验收。附 ONNX Runtime 工具案例、Cocos/Web 接入清单和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用验收方法 / 原创数值实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5；小游戏、原生移动及 PC/主机可迁移验收方法，推理后端需另测",
+  "sections": [
+    {
+      "heading": "场景：模型更小了，伙伴却换了目标",
+      "body": "一款俯视角战斗游戏用小型神经网络给可攻击目标打分。开发者想缩短 H5 首次下载，把浮点模型量化为 8 位；普通小怪表现正常，首领战却开始频繁选中列表里第一只怪。另一种版本不再截掉大分数，但两个接近的目标变成了同分。\n\n**量化范围决定能装下多大的数，也决定相邻刻度有多粗。** 本期用三组手写分数把这两个问题拆开。它们是原创反例，不是真实模型输出；代码只模拟一处量化与反量化，不转换完整模型，不证明某个推理库存在问题。\n\n设想中的目标打分属于判别式机器学习；量化是部署时的数值表示方法，不是生成式 AI，也不会自行训练出新策略。行为树或状态机仍管理攻击阶段、合法目标与冷却，搜索负责路径。模型只为允许的候选提供建议，不能改变碰撞、攻击范围或结算规则。"
+    },
+    {
+      "heading": "公开工具：先校准，再把量化版当作新的待验收产物",
+      "body": "[ONNX Runtime 量化指南](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html) 提供静态与动态量化工具。静态量化用校准输入估计激活的量化参数，随后固定；动态量化在运行时计算相关参数，也增加计算开销。量化可能损失精度，官方建议比较原模型与量化模型的权重、激活以定位差异；性能收益依赖模型和硬件。\n\n对这个游戏，建议先冻结浮点基线，再准备覆盖普通战斗、首领、满屏单位、极端血量等情境的校准记录。**校准集用于决定数值刻度，验收集用于判断改动是否可接受。** 不应看着最终验收失败，不断调刻度，然后仍把同一批结果称为独立测试。\n\n两套产物都保存模型哈希、预处理、输出顺序、量化参数与工具版本。若当前规则打分已经足够，先保留它作基线，不为了做量化而引入网络。本期引用的是 2026-11-14 核验的滚动文档，未安装 ONNX Runtime；这是一项既有工具和长期方法，不是今日新品报道。"
+    },
+    {
+      "heading": "一把 256 格的尺子：截断与舍入是两种损失",
+      "body": "本例采用无符号 8 位整数，即 uint8，取值 0–255；不是有符号 int8。将非负范围 [0,R] 映射到 256 个刻度，步距 s=R/255，零点为 0。量化为 q=clip(roundEven(x/s),0,255)，恢复近似值 x'=q×s。R 越大，能容纳的范围越宽，但刻度也越粗。\n\n[ONNX QuantizeLinear 的 opset 13 定义](https://onnx.ai/onnx/operators/onnx__QuantizeLinear.html#quantizelinear-13) 规定了 uint8 的饱和范围，以及最近舍入、恰好一半时取偶数的规则。本例照这个标量规则演示；JavaScript 的 Math.round 在半格处不能直接替代 ties-to-even。\n\n- 截断：R=1 时，1.6 与 2.2 都恢复成 1。它们原本的大小差别消失了。\n- 舍入：R=4 时，0.501 与 0.509 都落到 q=32，恢复约 0.501961；两者都没有超出范围。\n- 决策：本例同分时固定选 A，因此两种损失都可能把原来的 B 变成 A。若改成同分弃权，应另记弃权率，也不能说决策毫无变化。\n\n这里直接量化目标分数是为了方便手算。真实网络可能量化中间激活与权重，误差经过后续层还会变化；这些分数也不是概率。R=1、4、2.5 都是预设的教学对照，不是从游戏数据拟合出的推荐范围。"
+    },
+    {
+      "heading": "可运行实验：同时记录数值误差和选择变化",
+      "body": "保存为 quantization-audit.mjs，运行 node quantization-audit.mjs，无额外依赖。每组的两个数分别对应 A、B；outside 统计原值落在 [0,R] 外的数量，等于边界不算超范围。它不同于“整数结果恰好等于 255”的计数。\n\n```js\n/**\n * @file Inspect unsigned 8-bit quantization with synthetic NPC scores.\n * @author liliwei\n * @date 2026-11-14\n * @LastEditors liliwei\n * @LastEditTime 2026-11-14\n */\n\n/** @param {number} x Finite number. @returns {number} Nearest integer, ties to even. */\nexport function roundEven(x) {\n  const low = Math.floor(x), fraction = x - low;\n  if (fraction < 0.5) return low;\n  if (fraction > 0.5) return low + 1;\n  return low % 2 === 0 ? low : low + 1;\n}\n\n/** @param {number} x Scalar. @param {number} max Range ceiling. @returns {object} Q/DQ record. */\nexport function qdq(x, max) {\n  if (!Number.isFinite(x) || Math.abs(x) > 1e6 ||\n      !Number.isFinite(max) || max < 1e-6 || max > 1e6) {\n    throw new RangeError('Invalid scalar or quantization range');\n  }\n  const scale = max / 255;\n  const q = Math.max(0, Math.min(255, roundEven(x / scale)));\n  return { q, restored: q * scale, outside: x < 0 || x > max };\n}\n\n/** @param {number[]} pair Two scores. @returns {string} Winner; A wins ties. */\nexport function winner(pair) { return pair[1] > pair[0] ? 'B' : 'A'; }\n\n// These are hand-written examples, not neural network measurements.\nexport const samples = [\n  { id: 'ordinary', scores: [0.2, 0.8] },\n  { id: 'close', scores: [0.501, 0.509] },\n  { id: 'boss', scores: [1.6, 2.2] },\n];\n\n/** @param {number} max Range ceiling. @returns {object} Scalar and decision differences. */\nexport function audit(max) {\n  let outside = 0, changed = 0, absoluteError = 0;\n  const rows = samples.map(({ id, scores }) => {\n    const records = scores.map(x => qdq(x, max));\n    const restored = records.map(r => r.restored);\n    outside += records.filter(r => r.outside).length;\n    absoluteError += restored.reduce((sum, x, i) => sum + Math.abs(x - scores[i]), 0);\n    const before = winner(scores), after = winner(restored);\n    if (before !== after) changed++;\n    return { id, q: records.map(r => r.q), restored, before, after };\n  });\n  return { max, step: max / 255, outside, scalarCount: 6,\n    changed, decisionCount: 3, mae: absoluteError / 6, rows };\n}\n\nfor (const max of [1, 4, 2.5]) console.log(JSON.stringify(audit(max)));\n```\n\n输入数量级限制仅用于教学防误用。计算使用 JavaScript Number，不是 ONNX 的 FP32 内核；没有训练模型、存储真正的 uint8 权重或执行整数矩阵乘法，因此不能对这段脚本计时后宣布模型加速。"
+    },
+    {
+      "heading": "实跑结果：误差之外，还要看游戏最终做了什么",
+      "body": "正文代码在 Node.js v22.16.0 实际运行。三组原始分数均选择 B；以下 MAE 是六个标量的平均绝对误差，选择变化的分母则是三次决策，两者不能混用。\n\n| 范围上限 R | 步距 | 超范围标量 / 6 | MAE | 选择变化 / 3 | 发生变化的情境 |\n| --- | --- | --- | --- | --- | --- |\n| 1 | 0.003922 | 2 / 6 | 0.300294 | 1 / 3 | boss：B→A |\n| 4 | 0.015686 | 0 / 6 | 0.002641 | 1 / 3 | close：B→A |\n| 2.5 | 0.009804 | 0 / 6 | 0.002588 | 0 / 3 | 这三例没有变化 |\n\n从第一行到第二行，平均数值误差大幅下降，变化的决策数却相同，错误位置也换了。第三行只是恰好保住这三组顺序；它不证明 2.5 最优，更不代表量化模型具备 100% 准确率。原浮点模型也可能选错，**与基线一致和任务正确必须分别验收**。\n\n另外用逐个枚举 0–255 候选的独立参考，核对 1,149 个标量输入；检查半格取偶数、端点、范围内误差界、输入不变及 14 项非法参数。所有检查通过，证据限于这个标量模拟。没有测量模型文件大小、引擎帧率或设备功耗。\n\n实际回放应按首领、近分、普通场景分组，保存原分数、量化版分数、最终目标与游戏结果。只展示平均误差，容易把少见但重要的改变藏起来。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：把转换、装载与玩法执行分开",
+      "body": "以下是待在工程中验证的接入方案。[ONNX Runtime Web 官方入口](https://onnxruntime.ai/docs/get-started/with-javascript/web.html) 提供浏览器推理及 WASM、WebGPU 等后端资料；不能由“浏览器支持 WebGPU”推断某个量化模型就能按预期执行。应锁定实际安装的 onnxruntime-web 版本、模型 opset、算子/数据类型和设备，先验证会话创建与输出，再谈提速。\n\n1. 在制作机转换模型，不在玩家首次进入战斗时做校准。保存浮点与量化两个独立文件、特征版本和复跑输入；先用同一批记录比较输出，再接低频旁路打分。\n2. 统一输出顺序与候选 ID，记录同分策略。行为树或状态机再次过滤死亡、不可达、超出攻击范围的目标；未经批准的候选不进入正式攻击指令。\n3. 按 [Cocos Creator 3.8 LTS Web 发布文档](https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-web.html) 生成 Web Mobile / Web Desktop 产物，在真实构建目录核验模型、运行库和资源路径。编辑器里能打开页面，不代表发布产物能加载模型。该文档的历史浏览器列表不作为今天的兼容保证。\n4. 同设备、同战斗回放比较规则基线、浮点版和量化版，分别记录冷启动及热推理。只保留质量和预算都过关的组合；不要假定所有层都必须低精度。\n\n小游戏另核对宿主的 WASM、Worker、下载和包体约束；原生移动及 PC/主机可复用数据划分、回放与降级合同，推理库和硬件后端另选另测。以上没有在本期执行，不能把 Node 实验写成跨端验证。\n\n本期只用原创数字，没有第三方图像、音频或权重。若换成公开预训练模型，单独核对其权重与训练数据使用条件；推理库能安装，不等于模型及游戏素材已获商用授权。"
+    },
+    {
+      "heading": "上线门槛：质量、延迟和负载分别测",
+      "body": "“32 位变 8 位”只说明相关数值的位宽比是四比一；完整模型还含未量化部分、尺度与图结构，下载又可能压缩，峰值内存还包括工作缓冲区。不能据此承诺包体、耗时或内存都缩到四分之一。\n\n| 维度 | 同一设备回放中记录 |\n| --- | --- |\n| 质量 | 与浮点版的选择变化、同分/弃权；独立标注的合法目标与实际任务结果，按场景分组 |\n| 加载 | 冷缓存下载字节、下载耗时、会话创建、首次推理；热缓存另列 |\n| 延迟 | 特征采集到建议可用的 P50/P95、单次推理时间；同时记录游戏长帧 |\n| 负载 | 多 NPC 同时活动时的队列、峰值内存、持续运行温度或功耗记录 |\n| 收益 | 与规则基线和浮点版相比，质量损失是否在预先约定范围内，是否确有资源收益 |\n\n首版采用制作机转换、端侧推理，没有逐次云 API 费，但有下载流量、计算和维护成本。共享一个受控调度入口，设每逻辑步推理预算及最大在途数，不为每只 NPC 新建会话；具体数值从目标设备测量决定。切场景或候选改变后拒绝旧结果。\n\n模型文件缓存键包含哈希与版本，预处理和运行库兼容信息一起校验；结果缓存还要匹配当前状态与有效期。初始化失败、输出异常、超预算或质量不达标时，退回已审核规则；若浮点回退本身超预算，不能再强行加载它。\n\n如以后改成云端推理，必须把网络、排队、模型计算计入延迟，限定请求量并按实际用量记费，断网保留本地规则。本期没有云端调用或性能测量。整网量化和设备收益仍待实验，当前可以直接采用的是这套验收流程。"
+    },
+    {
+      "heading": "25 分钟练习：交一份选择变化记录",
+      "body": "1. 4 分钟：画出两个候选目标，固定分数顺序与同分规则，手算 R=1 时 1.6、2.2 的量化结果。\n2. 6 分钟：运行代码，保存三行真实输出。找到 R=4 的 close 反例，解释为什么 outside=0 仍会换目标。\n3. 5 分钟：自行增加一组接近分数，冻结后比较三个 R。不要根据这组结果调到全对，再把它叫独立验收。可用下方提示词辅助审阅。\n4. 7 分钟：有现成模型与 Cocos/Web 工程时，先记录浮点版的候选、构建版本和一次完整耗时；没有模型就交三种范围的回放表，把转换、包体与真机测量明确列为待做，不临时下载大模型凑结果。\n5. 3 分钟：交付输入、参数、输出与一个失败例，写清退回规则的条件。完成标准是能指出“数值变化在哪、选择是否变、设备收益有没有证据”。\n\n```text\n请审阅我提供的浮点/量化对照记录，不生成缺失测量。\n功能：NPC 在合法目标中选一个建议目标；同分选 A。\n请分别统计：超范围标量、数值误差、选择变化和独立任务正确性。\n按普通、首领、接近分数分组；检查校准集与验收集是否重用。\n指出一个“没有超范围也会改选择”的记录，并追溯到实际数值。\n没有模型文件、后端版本与真机计时时，将包体和提速写为待测。\n输出：有证据的结论、仍需补的记录、最小下一步；不要代改验收门槛。\n```\n\n这个提示词供已有编程助手整理证据，本次未另行调用外部模型。审阅助手的解释不能代替数值回放，也不能代替在游戏里验证模型的用途。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "ONNX Runtime：Quantize ONNX Models，静态/动态量化与精度、性能边界（滚动文档；2026-11-14 核验，未运行软件包）",
+      "url": "https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html"
+    },
+    {
+      "title": "ONNX QuantizeLinear：opset 13，uint8 饱和与 ties-to-even 舍入（2026-11-14 核验）",
+      "url": "https://onnx.ai/onnx/operators/onnx__QuantizeLinear.html#quantizelinear-13"
+    },
+    {
+      "title": "ONNX Runtime Web：浏览器推理与后端入口（滚动文档；2026-11-14 核验，未安装运行）",
+      "url": "https://onnxruntime.ai/docs/get-started/with-javascript/web.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Publish to Web Platforms，构建与发布入口（2026-11-14 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/editor/publish/publish-web.html"
+    }
+  ]
+}

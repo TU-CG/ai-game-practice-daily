@@ -58,6 +58,17 @@
   ],
   "reports": [
     {
+      "date": "2026-11-14",
+      "file": "2026-11-14.json",
+      "tags": [
+        "performance",
+        "development",
+        "testing"
+      ],
+      "title": "把 AI 模型压成 8 位：别让量化抹平 NPC 的选择",
+      "summary": "模型体积缩小后，NPC 也可能换了目标。用可运行的 8 位量化实验，观察范围截断与精度损失如何改变选择，再建立质量、加载和真机耗时三道验收。附 ONNX Runtime 工具案例、Cocos/Web 接入清单和 25 分钟练习。"
+    },
+    {
       "date": "2026-11-13",
       "file": "2026-11-13.json",
       "tags": [
