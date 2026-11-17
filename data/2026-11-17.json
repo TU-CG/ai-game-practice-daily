@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-17",
+  "tags": [
+    "operations",
+    "testing",
+    "design"
+  ],
+  "title": "AI 推荐新手提示：历史成功率高，不等于换策略会更好",
+  "summary": "文字提示的历史成功率更高，可能只是它被分给了更容易的局面。用可运行的 IPS 反例，学会记录真实选择概率、保留全部决策，并识别无法评估的候选。附 Vowpal Wabbit 工具案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 原创教学实验",
+  "scope": "Cocos Creator 3.8.x / Web、H5 与小游戏；日志合同可迁移到移动游戏及 PC/主机",
+  "sections": [
+    {
+      "heading": "场景：文字提示成功率更高，就该一直推荐文字吗",
+      "body": "一款解谜游戏准备让 AI 在玩家主动打开帮助面板时，推荐“文字线索”或“地图标记”。旧系统偏向给容易的关卡推文字，给困难的关卡推地图。后台看到文字提示后成功率更高，就想让新策略全部推荐文字。\n\n问题是，两种提示遇到的局面并不一样。**历史上被选中的提示表现如何，不等于把同一个新策略用于全部机会会怎样。** 本期用一份原创日志反例，练习离线策略评估；不宣称某种提示真的更好。\n\n设想中的 AI 是上下文赌博机：根据关卡状态选择提示，从已选动作的短期反馈学习。它属于机器学习决策方法，与强化学习有关，但这里不建模多步行动如何改变未来状态；不是生成式模型。帮助面板的开关、冷却与可用性仍交给普通状态机。本文只实现评估器，不训练推荐模型；三个候选策略都是手写的。"
+    },
+    {
+      "heading": "先把一次推荐定义清楚，再记录它为何被选中",
+      "body": "练习限定每位玩家第一次主动求助，一次推荐、一个观察窗口。文字为动作 0，地图为动作 1；easy/hard 是决策前已知的关卡分类，不用事后是否通关倒推。奖励定义为推荐后 60 秒内完成当前机关，成功记 1，否则 0；它不是点击率，更不是留存。\n\n建议日志至少包含 decisionId、决策时的上下文、可用动作、最终抽样概率分布、实际动作、策略与内容版本、结果和观察窗口。示例为简短只保留其中六个字段。\n\n1. 先过滤不合法提示，再得到两项概率并抽样。记录的是经过探索与过滤后，实际执行器采用的概率；不能拿模型分数、所谓置信度或整个报表的动作占比替代。\n2. 推荐与结果用同一 decisionId 关联，重传先去重。玩家退出但完整记录到窗口结束且未完成，按合同记 0；遥测丢失则标缺失并报告，不能直接扔掉或冒充失败。\n3. 不可用、超时回退、人工选择必须单独记录。若客户端改变了服务器决定，原概率已不再描述最终行为，不能照搬进这份评估器。\n4. 候选策略在另一批数据上训练或制定，评估前冻结。本例仅适用于同样的首次求助人群与内容版本；反复看结果再改策略，需要另留最终验收数据。"
+    },
+    {
+      "heading": "公开工具：Vowpal Wabbit，以及本例采用的 IPS",
+      "body": "[Vowpal Wabbit 官方教程](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html) 提供上下文赌博机与探索入口，数据包含上下文、动作、选择概率和成本/奖励。[离线评估教程](https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/off_policy_evaluation.html) 则处理“旧策略只留下已选动作反馈，如何评估新策略”的问题。本文核验的是 2026-11-17 的 latest 滚动文档，没有安装 VW，也不将其称作今日新品。实际采用时锁定软件版本；VW 的 cost 约定还须与自己的 reward 正确转换。\n\n本文用 IPS，即逆倾向概率加权。对已经冻结、每个上下文只选一个动作的候选：历史动作与候选一致时，权重为 1/p；不一致时权重为 0。把每条“权重 × 奖励”相加，**除以全部 N 条决策**，不是只除以匹配条数。这一公式及小概率导致高方差的局限，可见 [Dudík 等人的 ICML 2011 论文第 2.1 节](https://arxiv.org/pdf/1103.4601)；论文提出的 DR 方法本期不实现。\n\n直觉是：只以四分之一概率被选中的动作，每次观察代表更少见的一类抽样，所以得到四倍权重。但权重不能创造从未存在的证据：候选要选的动作必须在对应情境下有非零历史选择概率。概率还必须真实记录，反馈口径一致；只检查数字合法不能证明这些前提。"
+    },
+    {
+      "heading": "可运行反例：16 条原创日志，比较三种固定策略",
+      "body": "下面是人为安排的教学记录，不是实际随机采集的玩家数据。easy/hard 各八条；每行的概率来自设定的旧抽样规则，次数恰好符合比例，但现实中不能用频数反推每次概率。\n\n| 情境 | 实际提示 | 条数 | 成功条数 | 当时选择该提示的概率 |\n| --- | --- | --- | --- | --- |\n| easy | 文字 | 6 | 6 | 0.75 |\n| easy | 地图 | 2 | 2 | 0.25 |\n| hard | 文字 | 2 | 0 | 0.25 |\n| hard | 地图 | 6 | 2 | 0.75 |\n\n保存为 hint-ope.mjs，运行 node hint-ope.mjs，无额外依赖。naive 是只取匹配记录的成功均值，ips 是上述加权估计；ess=(Σw)²/Σw² 只是权重集中程度的诊断量，不是置信区间或独立玩家数。代码按输入记录检查支持条件，无法替你证明未出现的人群也被覆盖。\n\n```js\n/**\n * @file Audit deterministic hint policies using synthetic bandit logs.\n * @author liliwei\n * @date 2026-11-17\n * @LastEditors liliwei\n * @LastEditTime 2026-11-17\n */\nimport assert from 'node:assert/strict';\n\n/**\n * Evaluate a fixed policy on complete, deduplicated decision records.\n * @param {object[]} rows Records: id, context, action (0/1), prob, reward (0/1).\n * @param {object} policy Action IDs indexed by easy/hard context.\n * @returns {object} IPS estimate and overlap/weight diagnostics, not a confidence interval.\n */\nexport function evaluate(rows, policy) {\n  assert(Array.isArray(rows) && rows.length > 0);\n  for (const c of ['easy', 'hard']) assert([0, 1].includes(policy?.[c]));\n  const ids = new Set();\n  let matched = 0, wins = 0, weighted = 0, sumW = 0, sumW2 = 0, maxW = 0;\n  for (const r of rows) {\n    assert(r && typeof r.id === 'string' && r.id.length > 0 && !ids.has(r.id));\n    ids.add(r.id);\n    assert(['easy', 'hard'].includes(r.context) && [0, 1].includes(r.action));\n    assert([0, 1].includes(r.reward));\n    assert(Array.isArray(r.prob) && r.prob.length === 2);\n    for (const p of r.prob) assert(Number.isFinite(p) && p >= 0 && p <= 1);\n    assert(Math.abs(r.prob[0] + r.prob[1] - 1) < 1e-12);\n    const target = policy[r.context];\n    assert(r.prob[r.action] > 0, 'Impossible logged action');\n    assert(r.prob[target] > 0, 'Unsupported candidate action');\n    const hit = r.action === target;\n    const w = hit ? 1 / r.prob[r.action] : 0;\n    matched += Number(hit); wins += Number(hit) * r.reward;\n    weighted += w * r.reward; sumW += w; sumW2 += w * w;\n    maxW = Math.max(maxW, w);\n  }\n  assert([weighted, sumW, sumW2, sumW * sumW].every(Number.isFinite));\n  return { n: rows.length, matched,\n    naive: matched ? wins / matched : null,\n    ips: weighted / rows.length, maxW,\n    ess: sumW2 ? sumW * sumW / sumW2 : 0 };\n}\n\n// Hand-built illustration, not an actual randomized experiment or model output.\nexport const rows = [];\nfor (const [context, action, count, successes] of [\n  ['easy', 0, 6, 6], ['easy', 1, 2, 2],\n  ['hard', 0, 2, 0], ['hard', 1, 6, 2],\n]) {\n  for (let i = 0; i < count; i++) rows.push({\n    id: `d${rows.length}`, context, action,\n    prob: context === 'easy' ? [0.75, 0.25] : [0.25, 0.75],\n    reward: Number(i < successes),\n  });\n}\nexport const policies = {\n  text: { easy: 0, hard: 0 }, map: { easy: 1, hard: 1 },\n  contextual: { easy: 0, hard: 1 },\n};\nfor (const [name, policy] of Object.entries(policies)) {\n  console.log(name, JSON.stringify(evaluate(rows, policy)));\n}\n```"
+    },
+    {
+      "heading": "实跑结果：排名反转，但还没有上线结论",
+      "body": "正文代码已在 Node.js v22.16.0 实际运行，以下四舍五入显示。全部 16 条记录都进入 IPS 分母；旧策略在这批日志中的实际成功比例是 10/16，即 62.5%。\n\n| 冻结候选 | 匹配数 / 16 | 只看匹配记录 | IPS 估计 | 最大权重 | ESS |\n| --- | --- | --- | --- | --- | --- |\n| 全部文字 | 8 | 75.00% | 50.00% | 4 | 6 |\n| 全部地图 | 8 | 50.00% | 66.67% | 4 | 6 |\n| easy 文字、hard 地图 | 12 | 66.67% | 66.67% | 1.33 | 12 |\n\n全部地图的加权成功数为 2÷0.25＋2÷0.75＝10.6667，再除以 16；全部文字为 6÷0.75÷16＝0.5。原来的 75% 很大程度来自文字被分给了更多 easy 情境，不能直接当换策略的依据。\n\n本次还对四个独立教学机会枚举全部 16 种动作抽样序列，按已知抽样概率加权，四种固定策略共做 64 次评估；IPS 的期望与独立给定的潜在奖励均值一致。另通过 15 项非法输入检查、输入不变与逆序近似一致检查。它们验证公式实现，不证明日志概率真实或模型有效。\n\n小样本 IPS 可以超过 1：只有一条匹配成功记录且 p=0.25 时，估计就是 4。不要悄悄截成 100%；应保留结果并标记不稳定。若有支持但恰好零匹配，程序返回 IPS=0、ESS=0，也不代表策略必败。若候选动作概率为零，程序直接拒绝。**本期没有置信区间、真实随机实验或在线收益证据，不能根据表格宣布地图策略更优。**"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：先让数据闭环，再接模型",
+      "body": "首版在开发机或后台训练和评估，运行时只加载冻结的小策略。对于本文两类场景，用 JSON 查表就能验证流程；[Cocos Creator 3.8 LTS](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 可导入 JsonAsset，并从 json 属性读取。查表本身是普通规则，不要把它说成已部署学习模型。\n\n1. 帮助面板仅在玩家主动打开时触发一次决策；先判断提示可用性，锁定决策快照。记录实际展示与结果，不把“服务器已返回”当“玩家已看到”。\n2. 在自有测试构建中先回放日志，验证 ID 去重、窗口超时、断线和旧版本。小游戏、移动端、PC/主机可共享日志合同，但上报、存档和平台接入需分别验收；本期未运行引擎或真机。\n3. 端侧查表不需逐次云模型费用，仍测加载、日志与展示开销。若后续采用云端模型，设置请求超时和每次求助最多一次在途请求；测完整往返 P50/P95、峰值 QPS、错误率和每千次决策实际成本。超时使用预设文字提示或人工选择入口，并标明回退来源。\n4. 缓存可复用的模型/策略和已审核提示素材，键包含版本；不能把上次随机抽样的动作当新决策缓存复用，否则实际选择概率改变。离线失败时保留默认帮助，不阻塞主玩法。\n\n这里不在运行时生成对白，也未采用第三方美术或音频；提示使用项目自有、审核过的内容。云端训练或助手审阅只提供必要的去标识字段，记录真实计算与人工成本，不预估提效百分比。"
+    },
+    {
+      "heading": "验收重点：先证明可评估，再讨论是否值得试",
+      "body": "| 检查层 | 本例之外仍需的证据 |\n| --- | --- |\n| 数据可信 | 决策概率来自最终抽样器；重复、缺失、回退分别计数，结果窗口已结束 |\n| 覆盖与稳定 | 按关卡/版本列候选支持、匹配量、最大权重和 ESS；不能只报总体均值 |\n| 评估独立 | 冻结候选、独立留出；真实数据报告适用的置信区间，同玩家多条记录不能视为独立样本 |\n| 体验与业务 | 完成率之外记录关闭提示、误导和求助次数；不把短期成功推断成长期留存 |\n| 运行成本 | 决策到展示的延迟、冷/热加载、服务负载、失败回退与实际费用 |\n\n离线评估只筛候选，达到预先约定的证据要求后，再设计受控线上比较。若提示会改变后续关卡学习与再次求助频率，单步 IPS 不足以估计长期影响。固定旧日志也不能回答从未有过的动作会怎样；不要让生成式助手补写“玩家本来会成功”的奖励。\n\n可将日志合同、代码和实际输出交给已有助手审阅；不需要开通新的模型服务：\n\n```text\n审阅这个游戏首次求助推荐实验。只根据给定日志与策略：\n核对最终抽样概率、支持条件、去重和奖励窗口；解释 naive 与 IPS 的差别。\n手算一个候选，检查分母是否为全部决策。列出概率为零、没有匹配、\n极小概率、超时回退和结果缺失时应怎样处理。\n不得把构造日志说成真实玩家结果，不补造未选提示的奖励。\n输出：一个具体反例、对应检查、当前证据尚不能支持的上线结论。\n```"
+    },
+    {
+      "heading": "25 分钟练习：交一份能拒绝错误结论的评估记录",
+      "body": "1. 4 分钟：写清一个首次求助场景、两个合法提示、观察窗口和决策时可用特征；不要用事后通关标记当上下文。\n2. 6 分钟：运行正文，保存三行输出，手算全部地图与全部文字的 IPS；解释为什么分母一直是 16。\n3. 5 分钟：只造一条 p=0.25 的匹配成功记录，观察 IPS=4；再设一条旧策略只选文字的记录，评估全部地图应拒绝。用提示词复核，或手工审阅并注明。\n4. 7 分钟：有 Cocos/Web 工程时，用自有提示做一次决策—展示—结果的旁路记录，模拟一次重复上报和超时。没有工程就交字段表及反例，不填写虚构的模型或真机指标。\n5. 3 分钟：提交代码输出、概率来源、缺失/回退口径和一条尚不能证明的结论。交付目标是可复查的评估合同，今天不需要把学习策略推给玩家。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Vowpal Wabbit：Contextual Bandits，动作、概率与探索（latest 滚动文档，2026-11-17 核验；未安装运行）",
+      "url": "https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/python_Contextual_bandits_and_Vowpal_Wabbit.html"
+    },
+    {
+      "title": "Vowpal Wabbit：Offline Policy Evaluation，旧日志评估新策略（latest 滚动文档，2026-11-17 核验）",
+      "url": "https://vowpalwabbit.org/docs/vowpal_wabbit/python/latest/tutorials/off_policy_evaluation.html"
+    },
+    {
+      "title": "Dudík、Langford、Li：Doubly Robust Policy Evaluation and Learning（ICML 2011；arXiv v2，2011-05-06；核验第 2.1 节 IPS）",
+      "url": "https://arxiv.org/pdf/1103.4601"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源、JsonAsset 与 json 属性（2026-11-17 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
