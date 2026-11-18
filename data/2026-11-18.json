@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-18",
+  "tags": [
+    "development",
+    "testing"
+  ],
+  "title": "让 AI 写存档升级：格式变了，老玩家的进度不能变",
+  "summary": "AI 写出的存档转换能运行，却可能把零金币变成默认奖励，或多算一关进度。用可运行的版本迁移实验，守住字段含义、重复执行与失败保留；附 Copilot 指令用法、Cocos/Web 接入方案和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与单机存档；小游戏和原生平台需适配存储接口",
+  "sections": [
+    {
+      "heading": "场景：更新后能进游戏，存档就升级成功了吗",
+      "body": "一款 100 关的单机解谜游戏，要把旧存档的 coins 移到 wallet.gold，把“下一关”改成“已经完成到第几关”。AI 写出的转换函数没有语法错误，新版本也能打开，但零金币变成了默认赠送的 100，原本准备挑战第 8 关的玩家被算成已经打完第 8 关。\n\n**存档迁移首先要保持游戏含义，再满足新格式。** 本期让生成式编程助手辅助整理映射、起草纯函数和寻找遗漏；实际运行的迁移器是普通确定性程序，不是机器学习推理，也不需要强化学习、行为树或生成式模型常驻游戏。\n\n游戏、字段、提示词和代码均为原创教学示例。本文属于实用方法，附一个限定范围的可运行实验；不代表任何商业游戏已经采用，也不是今日新品消息。"
+    },
+    {
+      "heading": "先写清字段含义，别让助手替策划猜规则",
+      "body": "本例只支持按顺序通关，没有跳关、购买解锁或分支路线。nextLevel=1 表示尚未完成任何关；101 是全部 100 关完成后的哨兵值。若你的“解锁关卡”来自其他系统，下面的减一公式就不成立。\n\n| 旧版 v1 | 新版 v2 | 必须保留的含义 |\n| --- | --- | --- |\n| coins：非负安全整数 | wallet.gold | 一比一保留，0 也是合法余额 |\n| nextLevel：1–101 | progress.clearedThrough：0–100 | 已完成关卡数等于 nextLevel−1 |\n| schemaVersion：1 | schemaVersion：2 | 版本随完整对象一起更新 |\n\n从已经合法的 v2 再迁移，应得到等价的 v2；这叫幂等。迁移不得顺手发奖励、重置任务或访问网络，否则重复进入启动流程就可能改变玩家资产。版本不存在、来自未来、字段缺失或数值非法时，返回明确错误，不能用“新玩家默认值”掩盖旧档损坏。\n\n为控制示例范围，采用严格字段集合：遇到未知字段就拒绝，而不是悄悄丢掉。正式项目要逐字段制定保留、转换或明确废弃的规则；扩展字段如何处理属于产品决定，不应让 AI 自行删除。"
+    },
+    {
+      "heading": "公开工具做法：把迁移合同交给助手，再限制改动范围",
+      "body": "[GitHub Copilot 的仓库自定义指令文档](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions) 支持用 .github/copilot-instructions.md 提供仓库背景、构建与测试要求。可迁移的做法是把“迁移纯函数”“历史样本不可改”“测试入口”写成持续约束，再在本次任务中附具体字段表。功能支持因使用入口而异，应按实际客户端核对。\n\n这是 2026-11-18 核验的滚动文档，不指定模型或宣称本期使用了 Copilot。本文未调用该工具；下面的提示词也可交给已有编程助手。自定义指令帮助提供上下文，真正验收仍要执行测试与人工核对业务含义。\n\n```text\n为单机解谜游戏起草 migrate(rawJson) 纯函数。只返回新对象，禁止存储、网络、奖励发放和修改输入。\nv1 恰有 schemaVersion=1、coins、nextLevel。\ncoins 是非负安全整数；nextLevel 为 1..101，表示下一关；101 表示全部100关完成。\nv2 恰有 schemaVersion=2、wallet:{gold}、progress:{clearedThrough}。\ngold 原值保留；clearedThrough=nextLevel-1；合法v2重复迁移保持等价。\n未知版本、未知或缺失字段、非法数值必须拒绝，不使用默认值修复。\n先列字段映射与有歧义之处，再给最小实现和测试候选。\n必须覆盖零金币、第一关、全通关、重复迁移、未来版本和额外字段。\n测试不能反向修改旧样本；区分已运行结果和建议。存储提交另列方案，不混进函数。\n```\n\n实践时再附项目真实的旧版写入代码和脱敏样本。不要只发一份新接口，就要求模型猜所有历史格式；也不要把真实账号、购买凭据或整份玩家档案当作必要提示材料。"
+    },
+    {
+      "heading": "可运行实现：只转换，不覆盖原存档",
+      "body": "将下列代码保存为 migration.mjs，用 node migration.mjs 运行，无额外依赖。函数接收 JSON 文本；示例的安全整数上限用于防止 JavaScript 数值精度丢失，不是游戏经济上限。\n\n```javascript\n/**\n * @file Migrate an original tutorial save without touching storage.\n * @author liliwei\n * @date 2026-11-18\n * @LastEditors liliwei\n * @LastEditTime 2026-11-18\n */\n\n/** @param {object} value Parsed JSON object. @param {string[]} keys Exact fields. @returns {void} */\nfunction fields(value, keys) {\n  if (!value || typeof value !== 'object' || Array.isArray(value) ||\n      Object.keys(value).length !== keys.length ||\n      !keys.every(key => Object.hasOwn(value, key))) {\n    throw new Error('Unexpected fields');\n  }\n}\n\n/** @param {number} value Stored integer. @param {number} min Lower bound. @param {number} max Upper bound. @returns {number} */\nfunction integer(value, min, max) {\n  if (!Number.isSafeInteger(value) || value < min || value > max) {\n    throw new Error('Invalid integer');\n  }\n  return value;\n}\n\n/** @param {string} raw Original JSON text. @returns {object} Validated v2 save; never writes storage. */\nexport function migrate(raw) {\n  if (typeof raw !== 'string') throw new Error('Expected JSON text');\n  const save = JSON.parse(raw);\n  if (save?.schemaVersion === 1) {\n    fields(save, ['schemaVersion', 'coins', 'nextLevel']);\n    const gold = integer(save.coins, 0, Number.MAX_SAFE_INTEGER);\n    const clearedThrough = integer(save.nextLevel, 1, 101) - 1;\n    return { schemaVersion: 2, wallet: { gold }, progress: { clearedThrough } };\n  }\n  if (save?.schemaVersion === 2) {\n    fields(save, ['schemaVersion', 'wallet', 'progress']);\n    fields(save.wallet, ['gold']);\n    fields(save.progress, ['clearedThrough']);\n    const gold = integer(save.wallet.gold, 0, Number.MAX_SAFE_INTEGER);\n    const clearedThrough = integer(save.progress.clearedThrough, 0, 100);\n    return { schemaVersion: 2, wallet: { gold }, progress: { clearedThrough } };\n  }\n  throw new Error('Unsupported schema version');\n}\n\nconst old = '{\"schemaVersion\":1,\"coins\":0,\"nextLevel\":8}';\nconst upgraded = migrate(old);\nconsole.log(JSON.stringify(upgraded));\nconsole.log('idempotent:', JSON.stringify(migrate(JSON.stringify(upgraded))) === JSON.stringify(upgraded));\n```\n\n代码只接受本期的两种完整格式。fields 检查形状，integer 检查范围，映射负责业务含义；三者不能互相替代。不要用 coins || 100 填余额，因为合法的 0 会被覆盖。也不要直接令 clearedThrough=nextLevel，字段类型虽仍正确，却多送了一关进度。\n\n这里的 JSON 是应用自己按约定序列化的普通存档。若入口接受任意外部文件，还要在解析前限制大小，并按导入需求处理重复 JSON 键等问题；这段代码不是通用存档修复器。"
+    },
+    {
+      "heading": "本次实跑：等价、拒绝与尚未验证的部分",
+      "body": "正文代码已在 Node.js v22.16.0 实际运行。演示输出是 gold=0、clearedThrough=7，第二行 idempotent: true。以下是独立写下的部分预期：\n\n| 输入情境 | 应得结果 |\n| --- | --- |\n| v1，coins=0，nextLevel=1 | v2，gold=0，clearedThrough=0 |\n| v1，coins=42，nextLevel=8 | v2，gold=42，clearedThrough=7 |\n| v1，coins=900，nextLevel=101 | v2，gold=900，clearedThrough=100 |\n| 合法 v2 再迁移 | 数值与结构保持等价 |\n| schemaVersion=3，或 v1 多出 dlc 字段 | 拒绝，交由外层保留原档并处理 |\n\n本次检查通过：8 份明确预期样本；金币 0–5、已完成关卡 0–100 的 606 组组合及其重复迁移；17 项非法输入，包括损坏 JSON、缺字段、负数、小数、不安全整数、越界进度与未来版本。测试与文章使用同一份函数，未修改历史样本迎合结果。\n\n这些只证明限定字段与输入域中的转换符合合同，不是“玩家存档零丢失”的统计保证。本次没有运行 Cocos、真实浏览器持久化、断电恢复、云同步或真实玩家数据；后面的存储流程是待实施验收方案。"
+    },
+    {
+      "heading": "接到 Cocos / Web：升级成功之后，还要安全地采用新档",
+      "body": "[Cocos Creator 3.8 LTS 数据存储文档](https://docs.cocos.com/creator/3.8/manual/zh/advanced-topics/data-storage.html) 提供 sys.localStorage.getItem/setItem，复杂对象先 JSON 序列化；Web 使用 Web Storage，原生实现不同。建议把迁移函数放在不依赖 cc 的模块，由启动阶段的存档服务调用，组件不要各自迁移。\n\n第一版练习限定单写入者，用 puzzle.save.v1 保留原文、puzzle.save.v2 保存新版完整对象。按下面的顺序实现外层流程：\n\n1. 先读 v2；存在时严格验证 v2 并采用。即使 v1 仍在，也不能每次从旧备份重建 v2，否则新版里继续玩的进度会倒退。v2 损坏时进入明确的恢复流程，不静默退回较旧进度。\n2. 只有 v2 不存在才读取 v1。两个键都不存在才进入另行定义的新玩家初始化；访问存储抛错不等于“没有存档”。保留 v1 原始字符串。\n3. 在内存运行 migrate，检查成功后序列化为一个完整 v2 对象。不要把版本号、金币和进度拆成三次独立写入；不要先删除旧键。\n4. 写 v2，重新读回并解析校验，核对与候选一致后才让游戏继续。失败就保留旧档，提供重试或明确恢复入口；不能一边提示保存失败，一边按已提交的新状态继续累计进度。\n5. 重启时仍按“先 v2，后 v1”的顺序。旧备份何时清理、怎样让用户确认恢复，应另定保留策略；旧客户端也要阻止继续写旧格式，不能指望自动向下兼容。\n\n[MDN setItem 文档](https://developer.mozilla.org/en-US/docs/Web/API/Storage/setItem) 明确存储字符串，并可能抛出 QuotaExceededError。因此“内存里转换成功”和“新档可读”要分别记录；本方案的回读也不能证明突然断电后一定持久保存。\n\n[HTML Web Storage 标准](https://html.spec.whatwg.org/multipage/webstorage.html) 提醒不要假定存在跨窗口锁。上述单写入者前提必须由应用或后端保证：重复读取再写入不是跨标签页事务，storage 事件也不是锁。多设备云存档需要服务端版本与冲突处理。小游戏要核对宿主存储限制；移动原生、PC/主机可复用映射和样本，但要换成各平台存档接口并单独验收。"
+    },
+    {
+      "heading": "怎么评估 AI 帮忙是否有用",
+      "body": "| 检查项 | 应记录什么 |\n| --- | --- |\n| 语义保留 | 每个旧版本的余额、已完成关卡、已领取标记等独立预期；分开列转换成功、拒绝和错误接受 |\n| 重复启动 | 迁移后再开、已有 v2 且 v1 更旧、未来版本；不得重复发奖或回退进度 |\n| 存储故障 | 注入写入失败、读回失败、写后中断；重启后检查采用了哪份数据、原档是否还在 |\n| 平台代价 | 在目标设备量解析、迁移、序列化与存储耗时、峰值内存；记录真实存档大小及 P50/P95 |\n| 开发收益 | 从合同到通过验收的总时间、人工修改与复审时间；不能只算助手生成代码的速度 |\n\nAI 只在制作期参与，冻结后的转换代码随包发布；运行时在端侧执行，没有在线模型请求、推理队列或逐次模型费用。使用云编程助手时，用量和等待属于开发成本，按实际记录，本期没有价格或效率测量。运行时存档异常的降级是暂停写入、保留数据与明确恢复，而不是临时请模型猜一个新余额。\n\n本期没有采用第三方美术、音频或模型权重。测试通过后仍需审阅实际补丁，特别是有没有修改旧样本、扩大可接受版本、吞掉异常或悄悄重置进度。"
+    },
+    {
+      "heading": "25 分钟练习：交一份旧档、新档和失败处置表",
+      "body": "1. 4 分钟：选自己项目的一个存档变化，写清字段含义与边界；没有工程就沿用本文。亲手算出下一关为 8 时，已完成应为 7。\n2. 6 分钟：运行正文代码，保存真实输出，再试零金币、全通关与未来版本。用提示词让已有助手审阅，或人工检查并注明未调用工具。\n3. 5 分钟：新增一个不能丢失的旧字段，例如已领取奖励列表。先决定映射，再补预期测试；观察严格检查如何拦住“直接忽略它”的实现。\n4. 7 分钟：在独立测试存储中接入外层流程，验证已有新版时不重读旧档，并注入一次 setItem 抛错。没有运行环境就交事件表，明确把存储与 Cocos 联调标为待测；不要拿正式存档演练。\n5. 3 分钟：提交字段合同、旧输入、新输出、测试记录，以及失败后保留哪份数据。说明哪些证据来自实际运行，哪些仍只是方案。\n\n本期可直接复用的是迁移合同、纯函数与验收样本组织方法。真正上线前，需要补齐目标平台的写入、重启和恢复证据。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "GitHub Copilot：仓库自定义指令与构建、测试背景（滚动文档，2026-11-18 核验；本期未运行 Copilot）",
+      "url": "https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：存储和读取用户数据，sys.localStorage 与 JSON 序列化（2026-11-18 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/advanced-topics/data-storage.html"
+    },
+    {
+      "title": "MDN：Storage.setItem，字符串存储与 QuotaExceededError（Web API 滚动文档，2026-11-18 核验）",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/API/Storage/setItem"
+    },
+    {
+      "title": "WHATWG HTML Living Standard：Web Storage，多窗口共享与无锁假设（2026-11-18 核验快照）",
+      "url": "https://html.spec.whatwg.org/multipage/webstorage.html"
+    }
+  ]
+}
