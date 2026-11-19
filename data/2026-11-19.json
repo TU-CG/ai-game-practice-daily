@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-19",
+  "tags": [
+    "assets",
+    "development",
+    "testing"
+  ],
+  "title": "让 AI 画角色序列帧：裁掉透明边，也别让脚底跳起来",
+  "summary": "三张待机图单看正常，裁剪后连播却左右跳动。用可运行的坐标实验保留画布、裁剪与原点的关系，再分清摆放错误和 AI 原图不一致；附 Firefly 参考构图案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创坐标实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏与移动端 2D 序列帧；可迁移至 PC/主机 2D 资源流程",
+  "sections": [
+    {
+      "heading": "场景：三张待机图都好看，连播时脚底却在跳",
+      "body": "一款横版小游戏要给小机器人做轻微呼吸的待机动画。AI 起草的三帧都放在 128×128 画布里，脚底对着同一条地面线；导出时逐张裁去透明边，再把小图居中显示，机器人却左右晃动、上下跳。第三帧多了一点火花，改成“全部底部对齐”又把脚抬离地面。\n\n**角色的游戏原点、原画布里的标记点、裁剪后小图的中心，必须分开。** 本期让生成式图像工具起草候选，由人修画和标记，普通坐标计算负责还原摆放。它不是强化学习；状态机仍决定待机或攻击，碰撞与位移由游戏规则管理，不能从 AI 图像的透明轮廓临时推断。\n\n场景、数字、提示词和代码均为原创教学示例。本次只实跑坐标实验，没有生成图片、测评 Firefly、运行 Cocos 或测量真机帧率。坐标处理是实用方法；让生成模型稳定产出整段可用动画，仍需逐帧审核。"
+    },
+    {
+      "heading": "公开工具案例：参考构图能约束候选，不能保证动画一致",
+      "body": "[Adobe Firefly 的构图参考文档](https://helpx.adobe.com/firefly/web/work-with-images/generate-images/match-image-composition-to-reference-image.html) 说明可上传参考图，以轮廓、深度等结构引导结果，并调节 Strength 控制贴合程度。页面更新于 2026-06-16，本期于 11 月 19 日核验，属于既有工具用法，不是今日新品。实际使用须记录所选模型与设置；这里没有指定或运行某个模型版本。\n\n可迁移的做法是先画粗略姿势和地面线，再让工具细化外观。构图参考不等于像素锁定，也不证明机器人脸、装备和脚接触在各帧间一致。逐帧“像同一角色”和播放时“像一个连续动作”仍要人工检查。\n\n[Firefly FAQ](https://helpx.adobe.com/firefly/web/get-started/learn-the-basics/adobe-firefly-faq.html)（2026-11-10 更新）允许非 beta 功能生成的输出用于商业项目；beta 输出除产品明确另有说明外也可商用。输入参考图须有权使用，具体功能、所选模型与适用条款仍须留档，不能把这条说明泛化成所有第三方模型或素材都可用。FAQ 同时列出含中国在内的地区限制，因此本练习不以开通 Firefly 为前提：可以用已有获准工具，或自绘占位帧练流程。"
+    },
+    {
+      "heading": "制作合同：先保留画布和原点，再请求 AI 起草",
+      "body": "本例只做原地待机：统一 128×128 画布，左上为 (0,0)，X 向右、Y 向下；地面原点为 (64,112)，画布边界坐标允许取到 128。所有帧使用同一像素比例，不对裁后的小图分别缩放到相同宽高。画出固定地面线，先批准一帧的比例、配色与装备，再处理其余帧。\n\n```text\n为我的原创小机器人起草三帧原地呼吸待机候选。\n使用附带的自有角色参考和各帧姿势草图；保持镜头、光向、\n头身比例、面部标记、背包与配色一致。只改变胸部呼吸和轻微手臂姿势。\n制作目标：128×128 统一画布，地面原点在左上坐标 (64,112)，\n双脚保持接地，不移动根位置；不加入文字、阴影光斑或特效。\n不要逐张自动居中或按内容大小拉伸。尺寸与透明背景按工具能力输出，\n不能满足时明确说明；最终尺寸、透明通道和标记由制作人员复核。\n这只是候选，不能把提示词中的坐标当成已经精确实现。\n```\n\n生成后先修角色一致性、背景和脚位，再冻结一组批准帧。保留原图与画布；需要裁剪时记录 crop=[左,上,宽,高]、原点 pivot=[64,112]、帧 ID、时长、资源版本。火花、影子不定义脚底，最好独立成层。攻击前探、跳跃的离地高度属于有意动作，不能用“脚底全归零”把它们抹掉。"
+    },
+    {
+      "heading": "可运行实验：裁掉的左边和上边，也是一部分坐标",
+      "body": "下面假设裁后图作为中心锚点的矩形显示，显示坐标 Y 向上，无旋转、镜像或额外裁剪。crop 是原画布上的裁剪位置，不是图集打包后的纹理位置。原点在小图内的位置是 pivot−crop 的左上坐标；把它移到角色根节点的 (0,0)，就得到 offset。图片宽高与 offset 必须同时乘统一 scale。\n\n保存为 sprite-pivot.mjs，用 node sprite-pivot.mjs 运行，无依赖。8192 与 16 是教学输入范围限制，不是引擎限制。代码只验证数值边界，不识别图中的真实脚底。\n\n```javascript\n/**\n * @file Restore a marked root point after cropping an original tutorial frame.\n * @author liliwei\n * @date 2026-11-19\n * @LastEditors liliwei\n * @LastEditTime 2026-11-19\n */\n\n/** @param {object} frame Canvas, crop and pivot in top-left pixel coordinates.\n * @param {number} scale Uniform display scale. @returns {object} Centered quad size and Y-up offset. */\nexport function placement(frame, scale = 1) {\n  const { canvas, crop, pivot } = frame;\n  for (const [a, n] of [[canvas, 2], [crop, 4], [pivot, 2]]) {\n    if (!Array.isArray(a) || a.length !== n ||\n        !a.every(v => Number.isInteger(v) && v >= 0 && v <= 8192)) {\n      throw new Error('Invalid frame coordinates');\n    }\n  }\n  const [W, H] = canvas, [x, y, w, h] = crop, [px, py] = pivot;\n  if (!W || !H || !w || !h || x + w > W || y + h > H ||\n      px > W || py > H || !Number.isFinite(scale) || scale <= 0 || scale > 16) {\n    throw new Error('Invalid frame bounds or scale');\n  }\n  return { size: [w * scale, h * scale],\n    offset: [(x + w / 2 - px) * scale, (py - y - h / 2) * scale] };\n}\n\nconst crops = [[44, 32, 40, 80], [40, 24, 52, 88], [36, 16, 64, 104]];\nfor (const [i, crop] of crops.entries()) {\n  const p = placement({ canvas: [128, 128], crop, pivot: [64, 112] });\n  const [x, y, w, h] = crop;\n  const rawFoot = [64 - x - w / 2, y + h / 2 - 112];\n  const fixedFoot = rawFoot.map((v, k) => v + p.offset[k]);\n  console.log(JSON.stringify({ frame: i, rawFoot, offset: p.offset, fixedFoot }));\n}\n```"
+    },
+    {
+      "heading": "实跑结果：摆放恢复了，不代表 AI 已经画对",
+      "body": "正文代码在 Node.js v22.16.0 实际运行。三份裁剪框是人为构造，真正脚底都标在原画布的 (64,112)。下表单位为 scale=1 时的显示单位，Y 向上。\n\n| 帧 | 裁剪框 [x,y,w,h] | 小图直接居中后的脚位 | 应加的 offset | 修正后的脚位 |\n| --- | --- | --- | --- | --- |\n| A | [44,32,40,80] | [0,−40] | [0,40] | [0,0] |\n| B | [40,24,52,88] | [−2,−44] | [2,44] | [0,0] |\n| C | [36,16,64,104] | [−4,−44] | [4,44] | [0,0] |\n\n居中显示造成横向、纵向各 4 单位的范围变化；补偿后都为零。另以完整画布坐标作独立参考，检查 4 种裁剪、3 个原点、3 种比例、5 个位置，共 180 次映射全部一致；14 项非法坐标或比例检查通过。\n\n关键反例：C 帧裁剪底边到 120，是假设的火花撑大了边界。把原点错标为 (64,120)，算法仍接受，但真正脚底会出现在 [0,8]。这说明几何计算只能忠实执行标记，不能证明标记正确。若 AI 原图里的脚本来就移动了，保留画布只会保留这个问题；应先判断是否为有意动作，再修画或重新制作。"
+    },
+    {
+      "heading": "接到 Cocos / Web：先选一种坐标约定，再做连续播放",
+      "body": "首版推荐保留统一原画布。按 [Cocos Creator 3.8 LTS 的裁剪文档](https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/engine/trim.html)，需要保留画布中逐帧位移时，设置 Sprite 的 Trim=false、Size Mode=RAW。机器人根节点管理移动和碰撞，视觉子节点统一锚点和缩放；不要因为某一帧更宽就改变碰撞体。\n\n若把原画布中心放在视觉子节点中心，本例地面点相对中心为 (0,−48)，因此视觉子节点统一上移 48，便可让地面点落在根节点。切换三帧时这个偏移不变；这是上述约定下的推导，需在实际工程核对。\n\n只有外部流程确实输出了独立裁后小图时，才使用本文补偿方案：阻止导入器再次裁剪，设中心锚点、按 p.size 显示，并在换图同一时刻设置 p.offset。[Sprite 组件文档](https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/sprite.html) 区分 RAW、TRIMMED、CUSTOM；人工管理宽高时需固定对应设置，避免换图又重设尺寸。不要同时使用原画布恢复和手动补偿，否则会重复偏移。\n\n先在根节点画一条地面线，逐帧检查，再连续循环。H5、小游戏和移动端分别在实际构建中检查缩放、纹理过滤与图集；PC/主机的 2D 角色和界面动画也可复用这套元数据约定，但 3D 骨骼、根运动和透视投影不属于这段代码的范围。以上是接入方案，本期未做引擎联调。"
+    },
+    {
+      "heading": "评估与成本：按可用动画计投入，不按候选图数量计",
+      "body": "| 检查项 | 应留下的证据 |\n| --- | --- |\n| 空间稳定 | 待机接地帧相对地面线的横纵误差；区别有意动作与非预期抖动 |\n| 角色一致 | 脸、装备、比例、光向逐帧复核；单独记录审核通过率和返工原因 |\n| 时间连续 | 按目标时长连播至少十轮，检查跳姿势、首尾接缝与错序 |\n| 运行代价 | 实际包体、纹理显存、加载与换帧耗时；冷加载和稳态分别测 |\n| 制作投入 | 生成等待、实际用量费用、修画、标记及审核总时间 / 最终批准片段数 |\n\n本方案 AI 只在制作期工作：已有云工具的等待和费用记入制作成本；若用获准的本地模型，则记录开发机计算投入。第一轮限制为三帧、少量候选，按参考图、提示词、模型及设置保存结果，避免重复生成。没有可用生成服务就自绘或继续使用旧动画。\n\n玩家端只加载批准图片和帧表，没有逐帧云推理、模型请求延迟或按次模型费用；仍有资源加载、纹理与绘制负载。预加载当前动作，资源缺失时保留可用待机帧，并记录回退。裁剪能否节省包体或显存取决于打包和压缩，不能从裁剪面积直接推算，也不宣称本期提高了 FPS。"
+    },
+    {
+      "heading": "25 分钟练习：交三帧记录和一个错误标记反例",
+      "body": "1. 4 分钟：画三个自有占位帧，统一画布与地面原点，写下像素坐标方向和一条不许改变的角色特征。已有获准图像工具时可用提示词起草，等待超时就用占位图继续。\n2. 6 分钟：运行代码，保存三行输出，手算 B 帧为什么右移 2、上移 44。把 scale 改为 2，确认尺寸和偏移一起变化。\n3. 5 分钟：复现 C 帧把火花底边当脚底的错误标记，记录真正脚底偏高 8；再用正确标记恢复。不要把数值通过当作画面已审核。\n4. 7 分钟：有 Cocos 工程时先走 RAW 与 Trim=false 路线，画地面线，循环播放；没有环境就画三帧叠图并注明引擎待测。若选择裁后小图路线，单独验证补偿，不叠加两套偏移。\n5. 3 分钟：交付原画布、裁剪与原点表、代码输出、连续播放或待测记录，以及素材来源与生成设置。让下一位同事能解释每一帧为什么站在这个位置。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Adobe Firefly：参考图构图匹配与 Strength（Web 滚动文档，2026-06-16 更新；2026-11-19 核验，未运行模型）",
+      "url": "https://helpx.adobe.com/firefly/web/work-with-images/generate-images/match-image-composition-to-reference-image.html"
+    },
+    {
+      "title": "Adobe Firefly FAQ：商用条件、使用前提与地区限制（2026-11-10 更新；2026-11-19 核验）",
+      "url": "https://helpx.adobe.com/firefly/web/get-started/learn-the-basics/adobe-firefly-faq.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Auto Trim for SpriteFrame，保留序列帧画布位移（2026-11-19 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/engine/trim.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Sprite 组件、Size Mode 与 Trim（2026-11-19 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/ui-system/components/editor/sprite.html"
+    }
+  ]
+}
