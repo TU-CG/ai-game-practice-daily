@@ -58,6 +58,17 @@
   ],
   "reports": [
     {
+      "date": "2026-11-20",
+      "file": "2026-11-20.json",
+      "tags": [
+        "gameplay",
+        "testing",
+        "development"
+      ],
+      "title": "让 AI 选战斗技能：先排除当前放不出的动作",
+      "summary": "法力用完了，AI 却仍想放治疗；把分数乘零也未必能禁用它。用可运行的动作掩码实验，分清合法集合、策略选择与执行复查；附 MaskablePPO 工具案例、Cocos/Web 接入和 25 分钟练习。"
+    },
+    {
       "date": "2026-11-19",
       "file": "2026-11-19.json",
       "tags": [

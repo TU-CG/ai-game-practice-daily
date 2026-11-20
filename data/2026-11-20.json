@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-20",
+  "tags": [
+    "gameplay",
+    "testing",
+    "development"
+  ],
+  "title": "让 AI 选战斗技能：先排除当前放不出的动作",
+  "summary": "法力用完了，AI 却仍想放治疗；把分数乘零也未必能禁用它。用可运行的动作掩码实验，分清合法集合、策略选择与执行复查；附 MaskablePPO 工具案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏与移动端；可迁移至 PC/主机离散战斗策略",
+  "sections": [
+    {
+      "heading": "场景：AI 总想放治疗，法力却早已用完",
+      "body": "一款小队战斗游戏准备让离线训练的策略为伙伴选择等待、普攻或治疗。模型把治疗排在第一，但伙伴已经没有法力。开发者把治疗分数乘以零，以为已经禁用；另外两个动作的分数恰好为负，治疗反而继续第一。\n\n**“现在允许做什么”和“允许的动作中哪个更好”，应由两层分别回答。** 本期讨论强化学习策略的动作掩码：规则产生合法集合，策略只在集合内选择。掩码本身是确定性规则，不是训练出来的智能；负奖励也不能代替执行约束。\n\n这是实用接入方法，附原创战斗场景与数值实验。本文只运行手写 Q 值的选择和更新目标，没有训练策略、安装强化学习库、调用生成模型或运行 Cocos/真机。Q 值表示预期折扣回报，可以为负，不是成功概率。模型是否更会打，还需要独立对局验收。"
+    },
+    {
+      "heading": "公开工具案例：采样、学习与评估都要看到掩码",
+      "body": "[Gymnasium 的 Taxi 教程](https://gymnasium.farama.org/tutorials/training_agents/action_masking_taxi/) 标明兼容 1.4.0，展示三个位置：随机探索只抽合法动作，贪心选择只比较合法 Q 值，更新时只取下一状态合法动作的最大 Q。本期借用这套分工，不复现教程的训练收益。\n\n[SB3-Contrib 的 MaskablePPO](https://sb3-contrib.readthedocs.io/en/master/modules/ppo_mask.html) 是另一条公开工具路线：PPO 在策略分布层支持动作掩码，布尔 True 表示合法；文档要求使用其专用 MaskableEvalCallback 和 evaluate_policy。本文核验的是 2026-11-20 的 master 文档，页面标为 2.9.2；采用时应锁定实际安装版本。这是既有工具用法，不是今日发布新闻。\n\n不要把两种算法混接：本文代码演示 Q 值的贪心选择与一步目标，不是 PPO 实现。若以后训练 PPO，应沿其掩码分布与评估接口接入，不能简单在训练完后删除一个输出，就认为训练和部署行为一致。"
+    },
+    {
+      "heading": "先写动作合同：不合法，不等于不划算",
+      "body": "动作顺序固定为 wait、strike、heal。每个逻辑决策步采用同一份状态快照；以下仅为教学规则，不含冷却、治疗上限、移动、目标选择与伤害结算。\n\n| 动作 | 本例合法条件 | 选择后的含义 |\n| --- | --- | --- |\n| wait 等待 | hp 大于 0 | 不发起技能，逻辑时间继续推进 |\n| strike 普攻 | 活着、未眩晕、固定敌人在范围内 | 向正式战斗执行器提交普攻意图 |\n| heal 治疗 | 活着、未眩晕、mp 至少为 2 | 提交消耗 2 法力的自疗意图 |\n\n“这次治疗收益低”仍是合法选择，交给策略比较；“法力不足”才是硬条件。不要为了让演示胜率更好，把所有不喜欢的战术都屏蔽。掩码也不应读取 NPC 本来不知道的隐身敌人信息，否则可能把规则查询变成透视。\n\n状态机负责死亡、受击与战斗阶段；行为树可安排巡逻或战斗模式，在战斗节点内调用策略。若已有搜索器，掩码可用于列出合法后继，但搜索仍负责比较后果。三者都不能把“模型想执行”直接当作“结算已经发生”。"
+    },
+    {
+      "heading": "可运行实验：跳过非法项，不把它的分数改成零",
+      "body": "保存为 action-mask.mjs，执行 node action-mask.mjs，无额外依赖。函数接收三项有限 Q 值和严格布尔掩码；同分取前面的动作，全部不合法返回 null。Q 值不必非负，代码也不把它们归一化成概率。\n\n```js\n/**\n * @file Demonstrate legal-action selection and a masked Q-learning target.\n * @author liliwei\n * @date 2026-11-20\n * @LastEditors liliwei\n * @LastEditTime 2026-11-20\n */\nexport const ACTIONS = Object.freeze(['wait', 'strike', 'heal']);\n\n/** Build legality from a teaching snapshot. @param {object} s State. @returns {boolean[]} Mask in ACTIONS order. */\nexport function legalMask(s) {\n  if (!s || !Number.isSafeInteger(s.hp) || s.hp < 0 ||\n      !Number.isSafeInteger(s.mp) || s.mp < 0 ||\n      typeof s.stunned !== 'boolean' || typeof s.inRange !== 'boolean') {\n    throw new TypeError('Invalid state');\n  }\n  const alive = s.hp > 0;\n  return [alive, alive && !s.stunned && s.inRange,\n    alive && !s.stunned && s.mp >= 2];\n}\n\n/** Select the largest legal Q; ties keep the first ID. @param {number[]} q Finite values. @param {boolean[]} mask Legality. @returns {number|null} Action index or no action. */\nexport function bestLegal(q, mask) {\n  if (!Array.isArray(q) || !Array.isArray(mask) ||\n      q.length !== 3 || mask.length !== 3) throw new TypeError('Invalid shape');\n  let best = null;\n  for (let i = 0; i < 3; i++) {\n    if (!Number.isFinite(q[i]) || typeof mask[i] !== 'boolean') {\n      throw new TypeError('Invalid value');\n    }\n    if (mask[i] && (best === null || q[i] > q[best])) best = i;\n  }\n  return best;\n}\n\n/** Form a one-step target, not a complete trainer. @param {number} r Reward. @param {number} gamma Discount in [0,1]. @param {boolean} terminated True task terminal. @param {number[]} nextQ Next-state Q. @param {boolean[]} nextMask Next-state legality. @returns {number} Bellman target. */\nexport function target(r, gamma, terminated, nextQ, nextMask) {\n  if (!Number.isFinite(r) || !Number.isFinite(gamma) || gamma < 0 ||\n      gamma > 1 || typeof terminated !== 'boolean') throw new TypeError('Invalid target');\n  const next = bestLegal(nextQ, nextMask);\n  if (terminated) return r;\n  if (next === null) throw new Error('No legal action in nonterminal state');\n  const value = r + gamma * nextQ[next];\n  if (!Number.isFinite(value)) throw new RangeError('Target overflow');\n  return value;\n}\n\nconst q = [-2, -1, 9]; // Hand-written Q values, not model outputs.\nconst states = [\n  {hp: 5, mp: 0, stunned: false, inRange: true},\n  {hp: 5, mp: 2, stunned: true, inRange: true},\n  {hp: 0, mp: 2, stunned: false, inRange: true},\n  {hp: 5, mp: 2, stunned: false, inRange: true},\n];\nfor (const s of states) {\n  const mask = legalMask(s), chosen = bestLegal(q, mask);\n  console.log(JSON.stringify({mask, action: chosen === null ? null : ACTIONS[chosen]}));\n}\nconsole.log(JSON.stringify({\n  maskedTarget: target(2, 0.9, false, q, legalMask(states[0])),\n  unmaskedTarget: 2 + 0.9 * Math.max(...q),\n  terminalTarget: target(2, 0.9, true, q, legalMask(states[2])),\n}));\n```\n\ntarget 只构造一步学习目标 y=r+γ×max合法Q，不更新 Q 表。真正更新还需学习率，例如 Q←Q+α(y−Q)。下一状态真正终止时，目标就是即时奖励 r；非终止状态却没有合法动作，示例抛错，要求修正环境合同，不偷偷抽一个动作。采样时间耗尽的截断不自动等于任务终止，应按任务定义决定是否继续估值。"
+    },
+    {
+      "heading": "本次实跑：合法选择改善了，战术质量还没有答案",
+      "body": "正文代码在 Node.js v22.16.0 实际运行，所有行都使用人为写下的 Q=[−2,−1,9]。\n\n| 状态 | 掩码 [等待,普攻,治疗] | 结果 |\n| --- | --- | --- |\n| 活着、0 法力、未眩晕、敌人在范围内 | [true,true,false] | strike |\n| 活着、2 法力、眩晕 | [true,false,false] | wait |\n| hp=0 | [false,false,false] | null |\n| 活着、2 法力、未眩晕、敌人在范围内 | [true,true,true] | heal |\n\n第一行若逐项乘 0/1，得到 [−2,−1,0]，再无条件取最大值，仍会选到非法治疗。正确做法是只比较 −2 和 −1。对下一状态恰为第一行、奖励 2、折扣 0.9 的更新，合法目标为 2+0.9×(−1)=1.1；忽略掩码则为 10.1，把做不到的未来收益算了进去。真正终止时为 2。\n\n另对 24 种状态、64 组三项 Q 值共 1,536 次选择，与独立列出的合法动作及排序结果比较，全部一致；17 项非法输入检查通过。还验证了同分约定、输入不变、非终止空集合，以及“先选治疗、执行前法力归零”应被拒绝。这里只验证规则与算术，没有模拟完整战斗或证明学习提速。"
+    },
+    {
+      "heading": "接到 Cocos / Web：同一合同贯穿快照与结算",
+      "body": "[Cocos Creator 3.8 LTS 的 JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 提供 JsonAsset 及其 json 数据入口。可以用它保存动作 ID、顺序、消耗和规则版本；以下为尚未在引擎验证的接入方案，JSON 资源本身不提供学习或推理能力。\n\n1. 把规则函数放在不依赖 cc 的模块。由战斗系统产生 hp、mp、眩晕、范围等逻辑快照，不从按钮灰态或动画名称猜合法性。模型、动作表和特征格式绑定版本。\n2. 先旁路记录模型建议，仍由旧规则 AI 操作。记录原始首选、掩码、最终选择与拒绝原因，观察掩码是否漏条件或误禁合法动作。\n3. 接管时，快照带角色 ID、场景代次、决策编号和规则版本。异步结果返回后校验身份与时效，按当前状态重新检查该动作。合法性变化就拒绝这次意图，再由当前规则决定等待或重新决策；不复用旧快照结算。\n4. 正式执行器在同一权威逻辑步骤内检查并扣除资源、开始技能。联网游戏放在服务端或既有权威端，客户端掩码不能充当授权；用决策编号挡住重复结算。本文代码未实现这层事务。\n5. 死亡不强行发 wait；模型未加载、超时或数值异常时，交回经过验证的规则行为。对仍活着的角色，本例规则允许等待；实际游戏要定义自己的后备行为，避免永久停住。\n\n小游戏、H5 和移动游戏可先接小型离散策略；PC/主机的队友同样能复用合同。动作若还带目标、技能等级或落点，不能分别挑一个合法技能和合法目标后随意拼接，要校验最终组合；复杂动作空间另行设计条件选择流程。"
+    },
+    {
+      "heading": "怎么验收：零非法动作不是零问题",
+      "body": "| 维度 | 应记录的证据 |\n| --- | --- |\n| 掩码正确性 | 独立规则样本中，漏放非法动作和误禁合法动作分别计数；覆盖死亡、控制、资源边界、目标变化 |\n| 接管质量 | 相同地图与种子下的任务成功、完成时间、损伤、连续等待；与规则 AI 对照，单列失败场景 |\n| 时序与降级 | 决策到执行的 P50/P95、过期拒绝、重复回包、回退次数；不要只统计成功执行的请求 |\n| 实际负载 | 模型加载、特征计算、推理、规则检查分别量；对 1、10、30 个角色做同设备回放 |\n\n首版建议离线训练，冻结模型后端侧推理；规则掩码也在端侧算，不引入逐次云 API 费用，但仍有模型下载、内存、计算与电量成本。低频决策并错开角色采样，按实际响应需求分配预算。本文只有三项比较，不能据此推断真实网络耗时。\n\n若确需云端策略，将网络往返和排队计入延迟，限制在途请求与请求频率，并按实际请求量、用量及供应商计价记录费用。超过项目时限就走规则后备；旧响应不可晚到后补放技能。缓存模型和静态动作表时绑定版本；动态掩码要随当前状态更新，不能只按角色类型缓存，旧动作结果也不能直接重放。\n\n训练、验收和部署使用一致的动作顺序与规则版本。有人修改治疗消耗时，应同时更新环境和执行器，再重跑回放；合法率为 100% 仍可能一直等待。本文没有采用第三方美术、音频或模型权重，不涉及素材商用许可结论。"
+    },
+    {
+      "heading": "25 分钟练习：交一份合法表和一个过期决策",
+      "body": "1. 4 分钟：为自己的一个 NPC 写三项动作条件，分开“不允许”和“不值得”。没有工程就采用本文规则，手算零法力的合法集合。\n2. 6 分钟：运行代码，保存四行选择和三个学习目标。复现“分数乘零”的反例，再把全部 Q 改为负数，确认仍只选合法项。\n3. 5 分钟：给治疗增加一个冷却字段，先写冷却恰为零、尚未结束两条独立预期，再改掩码。用下面提示词审阅，或人工核对并注明未调用助手。\n4. 7 分钟：在测试工程旁路接入，安排“模型选治疗后、执行前消耗法力”的事件，确认拒绝且不扣费、不播成功效果。没有引擎环境就交状态事件表，将真实异步与结算验证标为待测。\n5. 3 分钟：交动作表、版本、输出、过期反例和未测项。解释为什么选择合法还不能证明 NPC 会赢。\n\n```text\n请审阅我附上的 NPC 动作表、掩码函数和独立预期。\n只检查规则一致性：动作顺序、资源边界、控制状态、空合法集合、执行前变化。\n不要把战术偏好新增为硬限制，不要替我猜未提供的玩法规则。\n逐项返回：对应规则、最小输入、预期合法集合、建议的验证步骤。\n分别标明代码可确认的问题、需要策划确认的含义和需要引擎实测的时序。\n```"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Gymnasium：Taxi 动作掩码教程，标明兼容 1.4.0（2026-11-20 核验；未运行训练）",
+      "url": "https://gymnasium.farama.org/tutorials/training_agents/action_masking_taxi/"
+    },
+    {
+      "title": "SB3-Contrib：MaskablePPO，掩码与专用评估接口（master 文档标为 2.9.2；2026-11-20 核验快照）",
+      "url": "https://sb3-contrib.readthedocs.io/en/master/modules/ppo_mask.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源、JsonAsset 与 json 属性（2026-11-20 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
