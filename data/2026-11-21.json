@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-21",
+  "tags": [
+    "content",
+    "design",
+    "testing"
+  ],
+  "title": "让 AI 写支线任务：还能到处走，不等于还能交任务",
+  "summary": "AI 起草的送货支线能顺利通关，却可能在寄存包裹后永远交不了货。用可运行的状态图实验，检查每个可达状态是否还有完成路径；附 ink / inkjs 工具案例、提示词、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创有限状态实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5、小游戏与移动游戏；可迁移至 PC/主机的有限支线流程",
+  "sections": [
+    {
+      "heading": "场景：主路线能通关，寄存之后却一直跑空趟",
+      "body": "一款小镇探索游戏要做送货支线：玩家带着包裹从镇上走到城门，交给守卫。生成式助手又提出一个生活化选项——先把包裹寄存在镇上柜台，再去逛逛。台词、按钮和往返都正常，唯独漏了取回操作。玩家还能走、还能聊天，任务却再也完不成。\n\n**从起点找到一条成功路线，只说明有人能完成；还要检查其他合法选择之后，是否仍有出路。** 本期的“软锁”限定为：任务尚未结束，当前状态已无法抵达任何批准结局。即使有按钮可点，也可能软锁。\n\nAI 在制作期起草分支、整理前置条件和提出反例；确定性状态机执行规则，图搜索检查可达性。这不是强化学习，也不训练模型。场景、提示词、图和代码均为原创教学示例；ink / inkjs 是相关公开工具。本期没有调用外部模型或运行 Cocos，属于长期实用方法，不是当天新品新闻。"
+    },
+    {
+      "heading": "先定任务合同：状态要包括地点，也包括包裹在哪",
+      "body": "本例不含金币、战斗、计时或随机事件。包裹只有“玩家持有”和“寄存在镇上柜台”两种未完成状态；不允许出售、销毁或取消任务。唯一批准结局是 delivered，表示交付已经完成。下面是故意漏掉取回动作的草案：\n\n| 完整状态 | 可以执行的动作与后果 |\n| --- | --- |\n| town:held | walk 到 gate:held；store 到 town:stored |\n| gate:held | return 到 town:held；deliver 到 delivered |\n| town:stored | walk 到 gate:stored |\n| gate:stored | return 到 town:stored |\n| delivered | 任务终止，无后续动作 |\n\n不能只按“镇上”和“城门”去重：同在城门，持有包裹时能交付，寄存时不能。若真实剧情还依赖是否听过暗号、一次性选项是否用过，这些信息也要进入状态。两个状态只有在后续可选动作和后果等价时，才能合并。\n\n本次允许的修复是增加 town:stored → town:held 的 retrieve，不收费、不发奖励、不生成第二份包裹。不能为了消掉报错，直接把“包裹丢了”标成成功。若策划本就允许失败结局，应先批准其条件、反馈与后续玩法，再单独统计成功和失败结局。"
+    },
+    {
+      "heading": "给 AI 的任务：先交规则表，再润色对白",
+      "body": "先由作者写好硬条件和允许改动项。让助手交出状态变量、动作前置条件、状态变化、终局定义，再由程序展开并检查；发现反例后只针对缺口重写，不把整份剧情反复重生成。下面的提示词可复制到已有助手；也可人工填表完成练习。\n\n```text\n为一个原创送货支线起草规则表，暂不写长对白。\n地点：town、gate；包裹：held、stored；交付后 delivered 终止。\n初始 town:held。可以往返，玩家可在镇上寄存。\n交付必须在 gate 且持有包裹；无金币、随机事件、销毁或取消任务。\n要求：每个可达的未完成状态，都至少存在一条交付路径。\n输出：状态变量、每个动作的前置条件和后果、批准结局、独立反例候选。\n允许增加取回操作；禁止删除寄存、凭空补包裹或把失败改称成功。\n收到搜索器反例后，解释丢失了哪条路径，再提出最小规则修改。\n标明哪些是你的提案，哪些已有程序运行证据；不要自报“已全量通过”。\n```\n\n审阅时分开三件事：规则是否符合策划意图、程序是否正确表达规则、文字是否准确解释动作。按钮写“暂存”却永远取不回，首先是规则与承诺不符；用更好听的台词无法修复。"
+    },
+    {
+      "heading": "可运行检查：从起点向前走，再从结局倒着找",
+      "body": "先向前遍历，列出起点真正能到达的状态，并保存到达它们的最短动作序列。然后把边反过来，从可达结局开始找前驱：被标记的状态都有一条完成路径。可达但未被标记的状态，就是本合同下的软锁。\n\n保存为 quest-audit.mjs，运行 node quest-audit.mjs，无额外依赖。输入是已经人工展开的小型显式状态图，不解析自然语言或任意 ink 脚本。代码检查目标存在、同状态动作名唯一、结局没有后续边；只保存玩具规模的完整路径，不是大型剧情分析器。\n\n```javascript\n/**\n * @file Find reachable quest states with no path to an approved ending.\n * @author liliwei\n * @date 2026-11-21\n * @LastEditors liliwei\n * @LastEditTime 2026-11-21\n */\n\n/** @param {object} graph State IDs mapped to [action, nextState] edges.\n * @param {string} start Initial state. @param {string[]} endings Approved terminal IDs.\n * @returns {object} Reachability counts and shortest paths into trapped states. */\nexport function audit(graph, start, endings) {\n  const ids = Object.keys(graph), known = new Set(ids), goals = new Set(endings);\n  if (!known.has(start) || goals.size === 0 ||\n      [...goals].some(id => !known.has(id))) throw new Error('Invalid endpoints');\n  for (const id of ids) {\n    const edges = graph[id], actions = new Set();\n    if (!Array.isArray(edges) || (goals.has(id) && edges.length)) {\n      throw new Error('Invalid terminal or edge list');\n    }\n    for (const edge of edges) {\n      if (!Array.isArray(edge) || edge.length !== 2 ||\n          typeof edge[0] !== 'string' || !edge[0] ||\n          actions.has(edge[0]) || !known.has(edge[1])) throw new Error('Invalid edge');\n      actions.add(edge[0]);\n    }\n  }\n  const queue = [start], paths = new Map([[start, []]]);\n  for (let i = 0; i < queue.length; i++) {\n    const from = queue[i];\n    for (const [action, to] of graph[from]) if (!paths.has(to)) {\n      paths.set(to, [...paths.get(from), action]); queue.push(to);\n    }\n  }\n  const parents = new Map(queue.map(id => [id, []]));\n  for (const from of queue) for (const [, to] of graph[from]) parents.get(to).push(from);\n  const reverse = queue.filter(id => goals.has(id)), canFinish = new Set(reverse);\n  for (let i = 0; i < reverse.length; i++) {\n    for (const from of parents.get(reverse[i])) if (!canFinish.has(from)) {\n      canFinish.add(from); reverse.push(from);\n    }\n  }\n  return {\n    reachable: queue.length,\n    edges: queue.reduce((n, id) => n + graph[id].length, 0),\n    nonterminalDeadEnds: queue.filter(id => !goals.has(id) && !graph[id].length).length,\n    canFinishFromStart: canFinish.has(start),\n    trapped: queue.filter(id => !canFinish.has(id)).map(state => ({state, path: paths.get(state)})),\n  };\n}\n\nexport const broken = {\n  'town:held': [['walk', 'gate:held'], ['store', 'town:stored']],\n  'gate:held': [['return', 'town:held'], ['deliver', 'delivered']],\n  'town:stored': [['walk', 'gate:stored']],\n  'gate:stored': [['return', 'town:stored']],\n  delivered: [],\n};\nexport const repaired = {\n  ...broken,\n  'town:stored': [...broken['town:stored'], ['retrieve', 'town:held']],\n};\nfor (const [name, graph] of [['broken', broken], ['repaired', repaired]]) {\n  console.log(JSON.stringify({name, ...audit(graph, 'town:held', ['delivered'])}));\n}\n```\n\npaths 按完整状态去重，循环往返不会让遍历无限运行；广度优先的首次路径按动作次数最短。反向标记检查的是“还存在一种走法”，不会替玩家选择路线，也不会强迫玩家停止闲逛。"
+    },
+    {
+      "heading": "本次实跑：没有死路按钮，也能有两处软锁",
+      "body": "正文代码在 Node.js v22.16.0 实际执行，得到以下结果。边数包含每个动作，结局也计入可达状态总数。\n\n| 方案 | 可达状态 | 动作边 | 非终局无出边状态 | 起点能交付 | 无法再完成的状态 |\n| --- | --- | --- | --- | --- | --- |\n| 漏掉取回 | 5 | 6 | 0 | 是 | town:stored、gate:stored |\n| 增加取回 | 5 | 7 | 0 | 是 | 无 |\n\n错误版到 town:stored 的最短反例只有 store；到 gate:stored 为 store → walk。之后仍可在镇上和城门间往返，所以“检查有没有空按钮列表”抓不到它。修复后可以 retrieve → walk → deliver；玩家仍然能够反复往返，因而“所有状态都可挽回”不等于“所有游玩序列最终都会结束”。\n\n另对三个节点、结局无出边的全部 64 种有向图，与逐状态独立前向搜索的结果比较，全部一致；8 项非法输入检查通过。还检查了不可达孤岛不计软锁、起点就是结局、普通死路和输入不变。这些只验证有限图算法，不是 AI 生成质量、商业游戏完成率或真实剧情的全量证明。\n\n扩展到真实任务时，状态数量可能成倍增长；若只搜索到某个深度或数量上限，未完成检查的部分应标为“未知”，不能标为“无软锁”。随机、计时、联网事件还需要建模结果分支；本期代码不证明概率保证或多人并发正确性。"
+    },
+    {
+      "heading": "公开工具案例：ink 的选择本身也会留下状态",
+      "body": "[ink 官方写作指南](https://raw.githubusercontent.com/inkle/ink/master/Documentation/WritingWithInk.md) 提供条件选项、变量和跳转；普通 * 选项默认只能使用一次，+ 为可重复选项，条件成立也不会取消一次性限制。因此迁移到真实脚本时，仅记录包裹字段可能还不够：选项使用历史也会影响以后能点什么。\n\n[inkjs 原作者 README](https://raw.githubusercontent.com/y-lohse/inkjs/master/README.md) 提供 JavaScript 的 Story、Continue 与 currentChoices 入口，并列出编译器、运行库和 JSON 格式的兼容关系。可迁移做法是把批准剧情预编译后加载到 Web，而不是让玩家端执行模型临时写出的脚本。\n\n两份资料均为 2026-11-21 核验的 master 滚动文档，不把分支名当已安装版本。本期没有安装或运行 inkjs；落地时锁定编译器与运行库版本，并保留编译产物。编译通过只证明相关语法与编译检查通过；本文状态图检查也不能直接替代真实运行库回放。\n\n接入验收要把 store → walk → return → retrieve → walk → deliver 作为实际按钮序列执行，逐步核对包裹、选项和任务状态。若抽象图有取回边而真实选项因一次性历史消失，模型中的“可完成”仍然是假象。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：制作侧搜索，玩家端只跑批准规则",
+      "body": "[Cocos Creator 3.8 LTS JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 提供 JsonAsset 与 json 属性。可以存放批准任务表、版本和动作 ID；以下是接入方案，本期未在引擎或真机验证。\n\n1. 用独立任务服务管理地点、包裹状态和结局；按钮只提交动作 ID。UI、NPC 行为树负责呈现与动作编排，不能各自另存一份相互矛盾的包裹状态。\n2. 制作侧展开有限状态，输出软锁及最短反例；人工批准修复后再发布任务表。已有程序化任务生成器也可走同一验收入口，生成与验证分开。\n3. 游戏每次执行选择前用当前状态复查条件，再一次性应用后果；实际交付与奖励仍走权威任务逻辑。用存档重载、重新进入场景、重复点击回放反例，检查图与运行态是否一致。\n4. H5、小游戏与移动端优先使用预编译内容或小任务表；PC/主机可复用状态合同与反例，但复杂任务应分段建模。故事内容版本、运行库版本和存档格式一起留档。\n\n| 验收层 | 留下的指标或证据 |\n| --- | --- |\n| 规则覆盖 | 可达状态、边数、完成检查的比例；软锁数与最短反例，不把未知算通过 |\n| 运行一致 | 反例逐步回放时，实际选项、包裹和任务状态与模型的差异 |\n| 内容质量 | 人工批准比例、返工原因、分支是否兑现玩家预期；图通过不等于故事好玩 |\n| 成本与负载 | 生成等待、实际费用、建模与审核总时间；构建侧搜索耗时/内存，端侧加载与选择响应 P50/P95 |\n\n本方案 AI 只在制作期工作：用云助手时记录实际请求用量和等待，用本地模型时记录开发机投入；本期未测价格或节省工时。批准结果按内容版本缓存，避免重复生成。运行时在端侧执行规则，没有在线模型延迟与按次推理费用，仍要测资源加载和 UI 响应。\n\n首版不在玩家设备做全图搜索。资源不可用时保留当前任务数据，暂缓进入新支线或使用兼容的已批准版本；不能自动清任务或请云模型现场补一个结局。本期未采用第三方素材或模型权重。"
+    },
+    {
+      "heading": "25 分钟练习：交一条能通关的路线，再交一条回不来的路线",
+      "body": "1. 4 分钟：画本文五个状态，手算 walk → deliver 为什么成功、store 为什么会失去完成路径。写清唯一批准结局与可以修改的规则。\n2. 6 分钟：运行代码并保存两行输出，核对 5 个状态、6/7 条边和两条最短反例。不要只看 canFinishFromStart。\n3. 5 分钟：用提示词让已有助手审阅表格，或人工给出修复并注明。尝试添加一个永远不可达的坏节点，解释为什么它不属于本次起点的软锁。\n4. 7 分钟：有 Cocos/ink 工程就按寄存、往返、取回、交付回放一次，再做一次中途重载；没有工程则交逐步状态表，明确引擎回放待测。\n5. 3 分钟：交付批准规则、错误与修复结果、最短反例、版本和未测项。最后回答：为什么修复后的玩家仍可一直往返，而程序仍判定每个状态都有出路？"
+    }
+  ],
+  "sources": [
+    {
+      "title": "ink：Writing with ink，条件选项、一次性与可重复选项（master 滚动文档；2026-11-21 核验）",
+      "url": "https://raw.githubusercontent.com/inkle/ink/master/Documentation/WritingWithInk.md"
+    },
+    {
+      "title": "inkjs：原作者 JavaScript 运行库 README 与兼容表（master 滚动文档；2026-11-21 核验，未安装运行）",
+      "url": "https://raw.githubusercontent.com/y-lohse/inkjs/master/README.md"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源、JsonAsset 与 json 属性（2026-11-21 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
