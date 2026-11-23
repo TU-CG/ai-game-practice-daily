@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-23",
+  "tags": [
+    "gameplay",
+    "development",
+    "testing"
+  ],
+  "title": "让 AI 记住路标：相同画面，下一步未必相同",
+  "summary": "伙伴走到同一个岔路口，却要根据先前的路标选择不同方向。用实际拟合的两张小表，对比当前观测与显式记忆，检查缺失线索和跨局重置；附 MiniGrid 公开案例、可复制提示词、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创教学实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏；移动、PC/主机可迁移观测与记忆合同，平台运行另测",
+  "sections": [
+    {
+      "heading": "场景：岔路口完全一样，正确方向却不同",
+      "body": "一款遗迹探索游戏让小机器人领路：入口显示红色路标时，最后向左；蓝色时，最后向右。中间经过一段没有线索的走廊，到了岔路口，两种任务呈现给策略的当前观测都只有 fork。只把这一刻的画面或状态交给模型，它缺少的可能是信息，而不是参数量。\n\n**当前看到什么，和这局已经知道什么，是两件事。** 本期把历史压成一个字段：最近看到的有效路标。它可以交给学习策略，也可以直接供状态机、行为树使用；移动与路径搜索仍由原有游戏系统负责。\n\n下文真正用带标签的序列拟合两张多数票分类表，属于极简监督学习；记住路标的特征由人设计，不是网络自己学会了记忆，也没有强化学习奖励优化。生成式助手可以帮助审阅观测合同和测试用例。游戏、序列、提示词与代码均为原创，公开项目只作方法参照。"
+    },
+    {
+      "heading": "公开案例：MiniGrid 把“先看过什么”变成了任务条件",
+      "body": "[Farama 的 MiniGrid Memory 环境](https://minigrid.farama.org/environments/minigrid/MemoryEnv/) 要求智能体先看起始房间的物体，穿过走廊后，在分叉处走向与起始物体匹配的目标。这是用于研究的环境，不是已经接入商业游戏的产品。本次核验 2026-11-23 滚动文档，页面给出 MiniGrid-MemoryS7-v0 创建入口；没有安装该包或报告其成绩。\n\n本文借用“线索与决策隔开”的实验思路，改成红/蓝与左/右的简化合同，不复刻环境的物体、动作空间或奖励。可以把它用于检查自动试玩助手、解谜伙伴或受战争迷雾约束的 NPC：先确认任务需要的信息是否进入了允许保留的历史，再决定是否更换模型。\n\n实用做法是建立明确的观察与记忆接口；本文的小表是教学实验。循环网络属于后文介绍的研究方向，不能把这里的通过结果当成神经网络能力证明。"
+    },
+    {
+      "heading": "实现顺序：把观测、记忆和标准答案分开",
+      "body": "练习先固定四种观测：red、blue、blank、fork。每段序列只有末尾一次 fork；遇到有效路标更新记忆，blank 不清空，整局开始时清空。若同局出现第二个有效路标，本合同以最后一个为准；真实玩法若不允许覆盖，应改合同和测试。\n\n1. 训练样本保存 trace 与 label。红对应 left、蓝对应 right；label 只给训练与独立评分，不放进推理输入，不透传关卡答案、随机种子或隐藏目标位置。\n2. 无记忆版在岔路口只用 fork 作特征；记忆版用最后见到的 red 或 blue。分别统计各特征下左右标签数量，取多数，同票固定向左。\n3. 训练用空白间隔 1、2，各含红蓝一段，共四段；拟合后冻结。测试用预先选定的间隔 0、3、7，共六段，不根据测试结果调规则。\n4. 未见过的记忆特征返回 null，接等待、回看或玩家选择，不默认向左。原始观察没有路标时，不允许从评分用的标准答案补回。\n\n可将下面模板交给已有编程助手，也可以人工完成；本次未另行调用外部模型：\n\n```text\n请审阅一个游戏伙伴的观测合同：\nred=>left，blue=>right；blank 不清除记忆；fork 才选择。\n同局最后一个有效路标覆盖旧值，新局必须清空；无路标则弃权。\n只可读取本局合法观测，不可读取 label、地图答案或随机种子。\n请给出：两个当前观测相同但答案相反的完整序列；\n一组红局结束后无路标新局的测试；一组同局覆盖测试。\n分别说明实测结果、依据与未覆盖范围，不推断模型准确率。\n```"
+    },
+    {
+      "heading": "可运行实验：拟合相同算法，改变可用的信息",
+      "body": "保存为 cue-memory.mjs，执行 node cue-memory.mjs，无额外依赖。fit 的多数票算法在两版中相同；差别是输入特征。predict 每次扫描一段完整新局，局部变量自然从 unknown 开始，不会继承上一次调用。\n\n```js\n/**\n * @file Compare a current-observation classifier with an explicit cue memory.\n * @author liliwei\n * @date 2026-11-23\n * @LastEditors liliwei\n * @LastEditTime 2026-11-23\n */\nconst tokens = new Set(['red', 'blue', 'blank', 'fork']);\n/** @param {string[]} trace One episode ending at a fork. @returns {void} */\nfunction checkTrace(trace) {\n  if (!Array.isArray(trace) || trace.length === 0 ||\n      trace.at(-1) !== 'fork') throw new Error('Invalid episode');\n  for (let i = 0; i < trace.length; i++) {\n    if (!tokens.has(trace[i]) || (trace[i] === 'fork' && i !== trace.length - 1))\n      throw new Error('Invalid observation');\n  }\n}\n/** @param {string[]} trace Checked episode. @param {boolean} remember Keep cues.\n * @returns {string} Feature available at the fork; no answer label is read. */\nfunction feature(trace, remember) {\n  let cue = 'unknown';\n  for (const observation of trace) {\n    if (observation === 'red' || observation === 'blue') cue = observation;\n  }\n  return remember ? cue : 'fork';\n}\n/** @param {{trace:string[],label:string}[]} rows Labeled training episodes.\n * @param {boolean} remember Enable explicit memory. @returns {Map<string,string>} Frozen choices. */\nexport function fit(rows, remember) {\n  if (!Array.isArray(rows) || rows.length === 0 || typeof remember !== 'boolean')\n    throw new Error('Invalid training input');\n  const counts = new Map();\n  for (const row of rows) {\n    checkTrace(row?.trace);\n    if (!['left', 'right'].includes(row.label)) throw new Error('Invalid label');\n    const key = feature(row.trace, remember);\n    if (key === 'unknown') throw new Error('Missing training cue');\n    const count = counts.get(key) ?? [0, 0];\n    count[row.label === 'left' ? 0 : 1]++;\n    counts.set(key, count);\n  }\n  return new Map([...counts].map(([key, [l, r]]) => [key, l >= r ? 'left' : 'right']));\n}\n/** @param {Map<string,string>} table Trained table, treated as read-only.\n * @param {string[]} trace One new episode. @param {boolean} remember Keep cues.\n * @returns {string|null} Proposed branch, or abstention for unseen features. */\nexport function predict(table, trace, remember) {\n  checkTrace(trace);\n  if (!(table instanceof Map) || typeof remember !== 'boolean') throw new Error('Invalid policy');\n  return table.get(feature(trace, remember)) ?? null;\n}\n\nconst train = [1, 2].flatMap(gap => ['red', 'blue'].map(cue => ({\n  trace: [cue, ...Array(gap).fill('blank'), 'fork'],\n  label: cue === 'red' ? 'left' : 'right'\n})));\nexport const reactive = fit(train, false), memory = fit(train, true);\nexport const results = [0, 3, 7].map(gap => {\n  const tests = ['red', 'blue'].map(cue => ({\n    trace: [cue, ...Array(gap).fill('blank'), 'fork'],\n    label: cue === 'red' ? 'left' : 'right'\n  }));\n  return { gap, total: tests.length,\n    reactive: tests.filter(x => predict(reactive, x.trace, false) === x.label).length,\n    memory: tests.filter(x => predict(memory, x.trace, true) === x.label).length };\n});\nconsole.log(JSON.stringify({ reactive: [...reactive], memory: [...memory], results,\n  noCue: predict(memory, ['blank', 'fork'], true) }));\n```\n\n这是离线序列检查器，每次预测会扫描整段 trace；它不是应在每一渲染帧重复调用的生产组件。真实运行时可逐个处理观测，维护一个 cue 字段，并显式实现 beginEpisode。表虽按约定冻结，JavaScript Map 本身仍可修改，调用方不能在评估期间继续训练。"
+    },
+    {
+      "heading": "本次实跑：六段全对，只说明这个信息合同够用",
+      "body": "正文代码在 Node.js v22.16.0 实际执行。无记忆表学到 fork→left：训练中左右各两条，同票选左；记忆表学到 red→left、blue→right。\n\n| 路标后空白观测数 | 独立测试序列数 | 只看当前观测答对 | 保留路标答对 |\n| --- | --- | --- | --- |\n| 0 | 2 | 1 | 2 |\n| 3 | 2 | 1 | 2 |\n| 7 | 2 | 1 | 2 |\n\n总计为 3/6 与 6/6。这里没有像素识别、转弯过程、碰撞或噪声。测试只是同一红蓝规则的不同间隔；6/6 不是新地图泛化、真人体验或通用记忆准确率。对于本例平衡的两种任务，只依赖同一个 fork 特征的固定输出必然错一半；更大的无历史模型也无法凭空区分它们。\n\n另枚举间隔 0–40 的 82 段序列，与独立写下的左右预期比较；14 项非法输入检查通过。还验证了空线索弃权、同局新线索覆盖、连续调用不串局、输入不变。将训练标签反转后，学到的方向也反转，说明关联来自标签，而不是 predict 偷读答案。以上都是符号实验。\n\n主动保留失败边界：删掉测试序列里的路标，记忆版会返回 null；训练只给红色，再测蓝色也会弃权。如果世界规则中途改成红向右而模型未更新，它仍会向左。记得准确，不等于记忆仍适用于当前版本。"
+    },
+    {
+      "heading": "研究延伸：循环网络能整合历史，但不保证总是更好",
+      "body": "[Hausknecht 与 Stone 的 DRQN 论文](https://arxiv.org/abs/1507.06527) 探索在 DQN 中加入 LSTM，通过循环状态整合时间信息。本次读取的是 arXiv v4（2017-01-11）的摘要与版本记录，未复现 Atari 实验。摘要同时指出：循环结构没有带来系统性的学习优势，适应观测变化是其考察的一方面。\n\n如果线索来自嘈杂图像、历史关系复杂，学习得到的循环表示可能值得实验；此时训练数据必须保留顺序和回合边界，还要验证长间隔与丢帧。不能因为本文一个字段有效，就承诺换成 LSTM 一定提高成功率。\n\n对于只有两种可靠线索的玩法，显式记忆加规则已经是清楚的基线；甚至无需拟合小表，直接写批准映射即可。有限状态机可以表示 unknown/red/blue，行为树在岔路口查询它，寻路算法执行所选目标。生成式模型、强化学习、传统规则与搜索各有职责，不能把“保留一个字段”叫作训练了大模型。本文不是今日新品新闻。"
+    },
+    {
+      "heading": "接到 Cocos / Web：一局一份记忆，先测边界再测负载",
+      "body": "首版采用端侧显式记忆与已批准的小表，不依赖云端回答。每个 NPC 的记忆归属于 episodeId 与 agentId；开始新局、换角色或复用对象时通过业务入口重置，暂停恢复则按设计保留，不能把组件所有启停都当作新局。\n\n[Cocos Creator 3.8 LTS 生命周期文档](https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html) 说明 onEnable/onDisable 与组件、节点启用状态有关；start 发生在首次 update 之前。因此不要只在 start 清一次记忆，也不要随意在每次 onEnable 清空。把“开始一局”写成独立业务方法，由实际游戏流程调用，是本期建议的接法。\n\n1. 观测入口只在 NPC 确实感知到路标时发事件；从地图配置直接读隐藏颜色，会把记忆实验变成答案泄漏。先旁路记录 episodeId、逻辑步、可见线索、记忆前后值与建议动作。\n2. 运行时逐事件更新一个字段，进岔路口再查表。以自有占位图完成红/蓝、长走廊、漏看、复活和两只 NPC 交错观测的回放；路径与碰撞仍交给正式移动系统。\n3. H5、小游戏和移动端补测切后台、对象池复用与重开；PC/主机沿用同一合同，另验本平台生命周期。若续档恢复本局，应同时恢复合法记忆及规则版本，不能只恢复位置。\n\n| 验收项 | 分开记录 |\n| --- | --- |\n| 决策质量 | 按线索类型、间隔分组的正确、错误、弃权及样本数；弃权仍计入总样本 |\n| 状态隔离 | 新局串入旧记忆次数、多 NPC 互相污染、漏看后误选、暂停后误清空 |\n| 真正完成 | 选对方向之后是否实际抵达；卡墙或寻路失败不能算策略成功 |\n| 运行预算 | 观测到执行的 P50/P95、峰值 NPC 数下的总耗时和内存，冷加载另列 |\n\n此小表没有逐次云 API 费用，但客户端计算、资源加载与维护仍有成本；本次没有测量设备延迟或帧率。生产版缓存已批准的表时带规则/模型版本；动作缓存必须包含记忆与当前上下文，不能只用相同的 fork 画面作键。状态不明、输出异常或超预算时等待或交还玩家，不从隐藏答案补救。\n\n若以后换云端模型，另设请求截止时间、每个 NPC 最多一个在途决策及全局负载上限，响应携带局号和逻辑步，拒绝旧局结果；统计网络与排队在内的延迟、峰值请求量和实际账单。缓存和降级仍遵守上述信息边界。本期未运行 Cocos、MiniGrid、循环网络或真机，也未采用第三方图像、音频与权重。"
+    },
+    {
+      "heading": "25 分钟练习：交一对相同当前观测，再交一个重置反例",
+      "body": "1. 4 分钟：画入口、走廊与岔路口，写出红蓝两段历史。圈出末尾相同的 fork，标清答案为什么不同。\n2. 6 分钟：运行代码，保存两张表和三行统计；把训练标签交换，检查方向跟随标签改变。\n3. 5 分钟：运行红局后，再预测只有 blank、fork 的新局，确认返回 null；补一条 blue、blank、red、fork，确认采用最后线索。可用模板让已有助手审阅。\n4. 7 分钟：有工程就用两个自有色块旁路记录一次“看路标—隐藏—岔路口—重开”；没有工程就交 beginEpisode、observe、choose 的接口合同，不填写虚构真机结果。\n5. 3 分钟：交付原始序列、模型表、实际输出、一个失败或弃权例，以及一条仍待游戏回放验证的结论。\n\n完成标准是能指出“这一动作依赖哪段合法历史、何时清空、没看到时怎么办”。三项来源均于 2026-11-23 联网检索并打开；文档是长期方法依据，研究是历史背景，不把教学数值当成生产收益。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Farama MiniGrid：Memory 环境（滚动文档，创建入口 MiniGrid-MemoryS7-v0；2026-11-23 核验，未安装）",
+      "url": "https://minigrid.farama.org/environments/minigrid/MemoryEnv/"
+    },
+    {
+      "title": "Hausknecht & Stone：Deep Recurrent Q-Learning for Partially Observable MDPs（arXiv v4，2017-01-11；仅核验摘要与版本）",
+      "url": "https://arxiv.org/abs/1507.06527"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：Life Cycle Callbacks（onEnable、start、onDisable；2026-11-23 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/en/scripting/life-cycle-callbacks.html"
+    }
+  ]
+}
