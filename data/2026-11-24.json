@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-24",
+  "tags": [
+    "operations",
+    "testing",
+    "development"
+  ],
+  "title": "让 AI 分流客服工单：准确率很高，队列为何挤满误报",
+  "summary": "奖励漏发投诉需要优先排查，但接近 99% 的分类准确率仍可能让一半优先工单选错。用可运行的统计反例，分清误报、漏报与人工处理容量；附 scikit-learn 阈值工具案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创合成数据实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏；移动、PC/主机客服后端可迁移；Node.js v22.16.0 实跑",
+  "sections": [
+    {
+      "heading": "场景：奖励投诉被提前看见，还是普通工单被提前塞进来？",
+      "body": "一款游戏上线活动后，客服收到“看完广告没拿到宝箱”“按钮点了没反应”和一般玩法咨询。团队想让 AI 阅读首次提交的文字与当时已有的诊断字段，把疑似奖励漏发的工单提前交给技术支持。高分只改变排查顺序，是否漏发仍要查服务端发奖记录。\n\n先限定正类：在统一核验流程下，确认属于奖励漏发、需要技术排查的工单。负类是已核验的其他工单；尚未核实不是负类。模型只能看到分流时已有的信息，不能看到后来补发成功、结案原因或客服最终标签。\n\nAI 可采用监督学习的文本分类器；若改用生成式模型按标准分类，也要单独验收其输出。阈值、排队和复核属于业务规则，不是强化学习。游戏里的奖励状态机与结算逻辑仍照常运行，分类结果不能直接补发奖励。\n\n本期实际执行的是统计检查器：分数与标签全部手工构造，未训练或调用模型。游戏场景、提示词和代码均为原创。目标是先判断一份模型成绩单能否支持分流决策。"
+    },
+    {
+      "heading": "先算四个数：正常工单多，小比例误报也会占满队列",
+      "body": "假设一个统计窗口有 10,000 份已核验工单，真正目标只有 100 份。这是教学设定，不是实际业务比例。模型选中了其中 90 份，同时把 9,900 份其他工单里的 99 份也选了进来。\n\n| 记录 | 数量 | 意义 |\n| --- | --- | --- |\n| TP | 90 | 真正的目标，被选中 |\n| FP | 99 | 其他工单，被误选 |\n| FN | 10 | 真正的目标，没选中 |\n| TN | 9801 | 其他工单，没选中 |\n\n总准确率是 (TP+TN)/总数＝98.91%；优先队列却有 189 份，只有 90/189＝47.62% 属于目标。召回率是 90/100＝90%；误报率则是 99/9900＝1%。**1% 的误报率与队列中 52.38% 的误报占比，分母完全不同。**\n\n[scikit-learn 的指标文档](https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html) 给出了 precision、recall 的定义与按阈值计算的接口。本文将 precision 称为“查准率”，不要与总准确率混用。\n\n如果把每份正类样本重复计 99 次，正负各有 9,900 份，类别内部的分数比例完全没变。同一门槛的查准率却变成 98.90%。这是人为改变类别占比的反例，重复样本不提供新证据，不能当作 19,800 份独立评测；平衡样本上的查准率也不能直接搬到真实工单流。"
+    },
+    {
+      "heading": "实施顺序：先定分流合同，再看哪个门槛能用",
+      "body": "1. 按问题合并重复提交，保留 ticketId、事件时间、游戏版本、语言、分流时可见字段和后来独立核验的标签。标签仍不确定的工单单列覆盖率，不填成“正常”。\n2. 用较早资料训练，在独立验证集选门槛；最终留出的较晚工单只做一次验收。同一问题的重复提交不能跨集合，语言、版本和渠道分别检查。\n3. 在看结果前定义优先队列的处理窗口、容量与可接受的漏报。本文用“每个窗口 100 个优先复核名额”作练习条件，不是人均产能或行业标准。普通队列也必须继续处理。\n4. 先旁路打分，再核对入选数、误选数、漏掉数与标签完整性。不把超时、未评分、积压工单从全流程统计中删除，也不拿优先队列的已复核样本代表全部工单。\n\n可以把实际脱敏字段与统计交给已有助手，使用下面的审阅提示词；也可人工完成，本次未另行调用外部模型。\n\n```text\n审阅这份游戏奖励工单分流方案。目标是优先排查，不自动补发。\n输入：正类定义、去重单位、分流时可见字段、训练/验证/验收区间、\n各阈值 TP/FP/TN/FN、未核验及未评分数量、同窗口人工容量。\n请检查：\n1. 是否使用了事后字段，重复问题是否跨集合；\n2. accuracy、precision、recall、误报率各自的分母；\n3. 入选量是否超容量，漏报去哪里，普通队列是否仍可进入人工处理；\n4. 缺少哪些证据，才能把离线门槛用于新版本。\n不要补造数据，不把高分当作漏发事实，不自行宣布最优门槛。\n```"
+    },
+    {
+      "heading": "可运行实验：容量检查不能偷偷裁掉分母",
+      "body": "保存为 triage-audit.mjs，运行 node triage-audit.mjs，无额外依赖。每行是“核验标签、分数、同类记录数量”，只有 score≥threshold 才入选；分数限定在 0–1，但不宣称它已校准成概率。\n\n```js\n/**\n * @file Audit weighted ticket scores without hiding false positives or missed cases.\n * @author liliwei\n * @date 2026-11-24\n * @LastEditors liliwei\n * @LastEditTime 2026-11-24\n */\n/**\n * @param {Array<[number, number, number]>} rows [confirmedLabel, score, count].\n * @param {number} threshold Inclusive score cutoff in [0, 1].\n * @param {number} capacity Review slots in the same reporting window.\n * @returns {object} Counts, ratios and capacity check; no queue truncation.\n */\nexport function audit(rows, threshold, capacity) {\n  if (!Array.isArray(rows) || !Number.isFinite(threshold) ||\n      threshold < 0 || threshold > 1 ||\n      !Number.isSafeInteger(capacity) || capacity < 0) {\n    throw new Error('Invalid audit arguments');\n  }\n  const c = { tp: 0, fp: 0, tn: 0, fn: 0 };\n  let total = 0;\n  for (const row of rows) {\n    if (!Array.isArray(row) || row.length !== 3) throw new Error('Invalid row');\n    const [label, score, count] = row;\n    if (![0, 1].includes(label) || !Number.isFinite(score) || score < 0 ||\n        score > 1 || !Number.isSafeInteger(count) || count <= 0 ||\n        !Number.isSafeInteger(total + count)) throw new Error('Invalid data');\n    total += count;\n    const selected = score >= threshold;\n    c[label === 1 ? (selected ? 'tp' : 'fn') : (selected ? 'fp' : 'tn')] += count;\n  }\n  const queued = c.tp + c.fp;\n  /** @returns {number|null} Null means the denominator has no observations. */\n  const ratio = (n, d) => d ? n / d : null;\n  return { ...c, total, queued, withinCapacity: queued <= capacity,\n    accuracy: ratio(c.tp + c.tn, total),\n    precision: ratio(c.tp, queued), recall: ratio(c.tp, c.tp + c.fn),\n    falsePositiveRate: ratio(c.fp, c.fp + c.tn) };\n}\n\n// Original synthetic score bins; these are not model predictions or real tickets.\nexport const field = [\n  [1, 0.95, 70], [1, 0.70, 20], [1, 0.20, 10],\n  [0, 0.95, 10], [0, 0.70, 89], [0, 0.20, 9801]\n];\nconst balanced = field.map(([y, s, n]) => [y, s, y === 1 ? n * 99 : n]);\nfor (const [name, rows, threshold] of [\n  ['balanced', balanced, 0.5], ['field', field, 0.5],\n  ['higher', field, 0.9], ['none', field, 1]\n]) console.log(JSON.stringify({ name, threshold, ...audit(rows, threshold, 100) }));\n```\n\nwithinCapacity 只比较数量，不模拟客服速度、到达时刻或排队等待；代码也不会截成前 100 份。没有入选时查准率返回 null，没有正类时召回率返回 null，都不能写成 100%。"
+    },
+    {
+      "heading": "本次实跑：队列缩小了，但漏掉的目标从 10 份变成 30 份",
+      "body": "代码在 Node.js v22.16.0 实际运行。下表只比较 10,000 份原始合成工单；平衡样本是上一节的分布反例，不用于容量估算。\n\n| 门槛 | TP / FP / FN | 入选量 | 总准确率 | 查准率 | 召回率 | 容量 100 内 |\n| --- | --- | --- | --- | --- | --- | --- |\n| 0.50 | 90 / 99 / 10 | 189 | 98.91% | 47.62% | 90% | 否 |\n| 0.90 | 70 / 10 / 30 | 80 | 99.60% | 87.50% | 70% | 是 |\n| 1.00 | 0 / 0 / 100 | 0 | 99.00% | 未定义 | 0% | 是 |\n\n所有分数最高只有 0.95，因此门槛 1.00 在本例中谁都不选，却仍有 99% 准确率。这是多数类占比带来的成绩，不能帮助客服发现漏发。\n\n0.90 是容量内的候选，但不能据此宣布上线：它漏掉了 30 份目标，业务是否接受还没有答案。单纯截断 0.50 的 189 份也不是同一策略；实际处理哪 100 份、同分怎样排序、剩余工单等多久，都要重新记录，不能沿用截断前的 90% 召回率。\n\n另用逐条展开的独立计数核对 64 组权重组合 × 4 个门槛，共 256 组；15 项非法输入检查通过，并检查等于门槛、空分母、容量边界、行序无关和输入不变。以上只验证统计逻辑，未证明任何模型效果、人工节省或线上等待改善。"
+    },
+    {
+      "heading": "公开工具案例：调阈值不会重新训练出更好的分数",
+      "body": "[scikit-learn 的决策阈值指南](https://scikit-learn.org/stable/modules/classification_threshold.html) 区分预测分数与采取动作，并提供 TunedThresholdClassifierCV，通过验证选择门槛。固定预测分数后，换门槛会改变最终分类；分数排序本身不会因此变好。\n\n本次核验的 stable 文档标为 1.9.1，属于既有工具教程，不是今日新品。本期没有安装或运行该工具；实际项目应锁定包版本、特征处理与分类器版本，再使用独立验证方案。指南明确提醒，不要用同一份数据训练模型又选择门槛。\n\n实际落地建议同时画出各门槛的查准率、召回率和入选量。容量不是默认统计指标会自动替你满足的条件；若没有候选同时满足约束，就保留旧流程、增加核验资料或调整可用资源，而不是挑一个好看的总分。当前反例也不证明“升高门槛总能提高查准率”，真实分数的排序质量需要检查。"
+    },
+    {
+      "heading": "接到 Cocos / Web：模型在后端，客户端只管可靠提交与状态展示",
+      "body": "这是运营侧应用，首版建议让模型在自有后端异步批量推理。Cocos/H5 提交问题描述、buildId、活动与请求关联 ID，接收工单编号；分类不占战斗帧循环，也不阻塞领取或客服入口。真实漏发以服务端记录核验，客户端文字只提供线索。\n\n[Cocos Creator 3.8 LTS 事件文档](https://docs.cocos.com/creator/3.8/manual/zh/engine/event/event-emit.html) 提供 EventTarget 的 on、emit、off。可在客服面板用本地业务事件展示“提交中、已收单、需补资料”，监听与取消使用匹配的函数及 target。事件总线不是可靠网络队列；重试与去重由工单接口处理。以下是待工程验收的接入合同：\n\n- 同一提交携带幂等 ID，先可靠收单再排推理；切后台、重连、重复点击不产生重复工单。小游戏、移动端补测恢复流程，PC/主机复用相同后端合同并核对各平台网络接入。\n- 分开统计收单延迟、模型排队与推理的 P50/P95、首次人工响应。推理并发和等待队列有上限；高峰负载、CPU/内存和人工积压分别测量，本次没有生产延迟数据。\n- 自有模型没有逐次第三方 API 账单，仍有算力和维护费用；若用云端分类 API，另记请求量、文本用量、重试和实付金额，密钥留在后端。不要把模型自报的“置信度”直接当成已验证概率。\n- 缓存按工单内容版本、特征版本与模型版本存原分数；门槛变更可重算分流，但不能复用旧路由结论。新增证据后让旧评分失效，不仅凭文本相似就共享不同玩家的工单结果。\n- 模型超时、缺字段或容量告警时回到既有人工入口，保留未评分与积压状态；未入选仍能正常求助。不要把“没有优先处理”写成“问题不存在”。\n\n上线前按版本、语言、渠道核对误报与漏报，并抽查未入选工单。仅审核入选样本会看不到漏报；若采用抽样，保存抽样概率并按设计估计，不能直接拼出全量混淆矩阵。新活动改变问题比例或文本表达时，重新验收。本文不使用第三方素材或模型权重，不涉及素材商用授权。"
+    },
+    {
+      "heading": "25 分钟练习：交一张四格表，再交一条普通队列的退路",
+      "body": "1. 4 分钟：写清自己的目标工单与核验条件，手算 90/189 和 99/9900，解释两个百分比为何不矛盾。\n2. 6 分钟：运行代码并保存四行输出，核对平衡样本与原始样本；注明这些分数是手写的。\n3. 5 分钟：将容量改为 50，再看门槛 0.90；它虽然查准率不变，80 份仍超过容量。不要通过丢弃记录把表格改成合格。\n4. 7 分钟：用三个模拟工单走一遍“正常收单、模型失败、重复提交”；有测试工程就记录真实结果，没有就交接口与事件表，标明未联调。\n5. 3 分钟：交付四格表、未评分处理、一个不满足条件的门槛和需要补测的分组。解释为什么容量内、准确率高都不足以单独决定上线。\n\n三项来源均于 2026-11-24 联网检索并打开。方法是实用的验收流程，数字是原创教学实验；未运行 Cocos、分类模型或真实客服系统，不把演算结果当作生产收益。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "scikit-learn：precision_recall_curve，指标定义与阈值（stable 文档标为 1.9.1；2026-11-24 核验）",
+      "url": "https://scikit-learn.org/stable/modules/generated/sklearn.metrics.precision_recall_curve.html"
+    },
+    {
+      "title": "scikit-learn：Tuning the decision threshold，独立验证与 TunedThresholdClassifierCV（stable 1.9.1 文档；未安装运行）",
+      "url": "https://scikit-learn.org/stable/modules/classification_threshold.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：监听和发射事件，EventTarget 的 on、emit、off（2026-11-24 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/engine/event/event-emit.html"
+    }
+  ]
+}
