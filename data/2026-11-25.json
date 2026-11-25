@@ -1,0 +1,64 @@
+{
+  "date": "2026-11-25",
+  "tags": [
+    "assets",
+    "performance"
+  ],
+  "title": "AI 材质进游戏：法线方向错了，调强度也救不回来",
+  "summary": "AI 从照片推导出的法线贴图，放进游戏后可能把某个方向的凹凸表现反过来。用三组可运行数值说明为什么正面光会漏检，再建立导出、方向转换与多光向验收流程；附 Substance 3D Sampler 案例、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 · 原创数值实验",
+  "scope": "Cocos Creator 3.8 LTS 的 3D 材质 / Web、H5、小游戏与移动端；PC/主机材质流程可迁移；Node.js v22.16.0 实跑",
+  "sections": [
+    {
+      "heading": "场景：石板预览像凸起，进游戏却像凹下去",
+      "body": "一款遗迹探索游戏要给低面数地板补石纹。美术用自有照片生成材质通道，在工具里看着正常；接到游戏后，沿某一方向的砖缝光照却反了。开发者不断降低法线强度，异常变淡了，石纹也一起消失。\n\n先把两个问题分开：AI 是否推导出了合理的表面方向，以及导出文件与引擎是否用同一种约定解释这些方向。只改强度，不能修正坐标约定；换一个生成模型，也不能自动修复导入链路。\n\n本期让 AI 在制作期从图像估计材质通道，再用确定性数值和多光向场景验收。图像到材质的学习模型属于机器学习；普通高度转法线、通道转换属于图像处理，不是强化学习。法线贴图改变光照使用的方向，不改变碰撞、寻路或模型轮廓。状态机、行为树仍管理玩法。\n\n石板场景、提示词、样本和代码均为原创。我们实际运行的是方向解码实验，没有生成或下载材质、运行 Sampler、启动 Cocos，也没有测量 GPU 性能。"
+    },
+    {
+      "heading": "公开工具案例：AI 推导材质，与程序化转换要分清",
+      "body": "[Substance 3D Sampler 的 Image To Material 文档](https://experienceleague.adobe.com/en/docs/substance-3d-sampler/using/filters/tools/image-to-material) 区分 AI Powered 与 B2M：前者利用学习模型生成法线、高度、粗糙度等通道，并尝试去除固有色中的阴影与高光；后者用程序化方法生成通道。本文不把两者都叫作生成式大模型，也不将单张图的估计称为真实几何扫描。\n\n这是 2026-04-07 更新、今天重新核验的滚动工具文档，不是今日新品。落地时记录实际安装版本、所用算法和导出预设；本期未安装，不能提供实测生成质量或耗时。\n\n商用采用先看所用许可与输入来源。[Adobe 官方 FAQ](https://helpx.adobe.com/substance-3d/substance-3d-faq.html) 明确免费学生与教师许可限非商业学习用途，不能默认拿来生产商业游戏资产。练习使用自有照片；若换成图库或生成服务图片，应另核对该素材的使用条件，不能从软件订阅推导出任意输入都可商用。本期没有采用第三方素材。"
+    },
+    {
+      "heading": "先约定数据含义：翻转绿色通道，不等于把图片上下翻过来",
+      "body": "[glTF 2.0 规范](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#material-normaltexture) 将切线空间法线的 XYZ 存入 RGB，使用线性数据；解码的基本形式是 2×采样值−1，参与光照前再归一化。这里的切线空间是表面局部坐标，不是世界坐标。\n\n本例固定同一块平面的切线基底，目标方向为 n=(0,0.6,0.8)，对应理想浮点 RGB=(0.5,0.8,0.9)。若源文件仅 Y 约定相反，G 会变成 0.2；按目标约定直接读取，得到 (0,−0.6,0.8)。转换 G→1−G 可以还原，前提是其他约定完全相同。\n\n**绿色通道取反改变每个像素记录的方向；上下翻图改变像素的位置。** 两者不能互相代替。不要凭“OpenGL/DirectX”文件名就猜最终引擎行为，也不要看到凹凸异常就同时翻 UV、翻绿色、改强度。\n\n1. 留下原图、工具/算法版本、各通道含义、法线空间、Y 方向、位深和导出预设；颜色贴图与方向数据分开处理，避免对法线套显示颜色的 sRGB 解码。\n2. 用已知平面与已知倾斜方向作校准件，先验证基底和灯光，再接 AI 候选。使用相同 UV、模型切线与材质设置。\n3. 确认只是 Y 约定不匹配时，只在一处转换，并写入记录；导出已经转换过，导入就不要再次转换。\n4. 若换方向仍不对，再查原图残留光照、UV 镜像、切线基底和压缩；AI 估计本身也可能错。单独翻 Y 并不等于把所有方向的凹凸完整反转。"
+    },
+    {
+      "heading": "可运行实验：同一法线，换三个光向检查",
+      "body": "保存为 normal-convention.mjs，执行 node normal-convention.mjs，无额外依赖。光向定义为“表面指向光源”，全部在同一切线基底中。diffuse 只算 max(0,n·l)，不模拟完整 PBR、曝光、阴影或最终屏幕颜色。\n\n```js\n/**\n * @file Check tangent-space normal conventions with synthetic samples.\n * @author liliwei\n * @date 2026-11-25\n * @LastEditors liliwei\n * @LastEditTime 2026-11-25\n */\n/** @param {number[]} v Finite nonzero vector. @returns {number[]} Unit vector. */\nexport function unit(v) {\n  if (!Array.isArray(v) || v.length !== 3 || !v.every(Number.isFinite)) {\n    throw new TypeError('Invalid vector');\n  }\n  const length = Math.hypot(...v);\n  if (!Number.isFinite(length) || length === 0) throw new RangeError('Invalid length');\n  return v.map(x => x / length);\n}\n/** @param {number[]} rgb Linear data in [0,1], not display colors.\n * @param {boolean} flipGreen Whether the source Y convention needs conversion.\n * @returns {number[]} Unit normal in the agreed target tangent basis.\n */\nexport function decode(rgb, flipGreen = false) {\n  if (!Array.isArray(rgb) || rgb.length !== 3 ||\n      !rgb.every(x => Number.isFinite(x) && x >= 0 && x <= 1) ||\n      typeof flipGreen !== 'boolean') throw new TypeError('Invalid normal sample');\n  const [r, g, b] = rgb;\n  return unit([2*r-1, (flipGreen ? -1 : 1)*(2*g-1), 2*b-1]);\n}\n/** @param {number[]} n Normal. @param {number[]} light Surface-to-light direction.\n * @returns {number} Unitless diffuse cosine, without exposure or PBR shading.\n */\nexport function diffuse(n, light) {\n  const a = unit(n), b = unit(light);\n  return Math.max(0, Math.min(1, a.reduce((s, x, i) => s + x*b[i], 0)));\n}\n\n// Original ideal float samples; no images or AI outputs are loaded.\nexport const cases = [\n  ['target-Y', [0.5, 0.8, 0.9], false],\n  ['opposite-Y-unconverted', [0.5, 0.2, 0.9], false],\n  ['opposite-Y-converted', [0.5, 0.2, 0.9], true],\n];\nfor (const [name, rgb, flip] of cases) {\n  const n = decode(rgb, flip);\n  console.log(JSON.stringify({name, normal:n,\n    front:diffuse(n,[0,0,1]),\n    plusY:diffuse(n,[0,0.6,0.8]),\n    minusY:diffuse(n,[0,-0.6,0.8])}));\n}\n```\n\n输入是理想浮点通道，不是读取 PNG。实际 8 位文件还会发生舍入；本例也不包含纹理过滤、mipmap、压缩、切线变换和强度参数。flipGreen 只能表达已确认的 Y 约定转换，不能自动识别源格式。"
+    },
+    {
+      "heading": "本次实跑：正面光看不出错，上下斜光会交换结果",
+      "body": "正文代码在 Node.js v22.16.0 实际运行，得到下表；数值是无量纲漫反射余弦项，不是材质亮度测量或帧率。\n\n| 样本 | 解码方向 | 正面光 | +Y 斜光 | −Y 斜光 |\n| --- | --- | --- | --- | --- |\n| 目标约定 | (0,0.6,0.8) | 0.80 | 1.00 | 0.28 |\n| 相反 Y，未转换 | (0,−0.6,0.8) | 0.80 | 0.28 | 1.00 |\n| 相反 Y，转换一次 | (0,0.6,0.8) | 0.80 | 1.00 | 0.28 |\n\n正面光只有 Z 分量，两种方向的 Z 都是 0.8，所以它们完全一样。两条斜光分别是 (0,±0.6,0.8)，错误方向恰好让结果交换。两种法线的长度也都等于 1，因此只验“是否归一化”同样漏检。\n\n另外检查 25 个已知上半球方向：反向编码再转换都还原到独立预期；12 项非法输入检查通过。将这 25 个方向按每通道 8 位舍入后再解码，最大角误差约 0.318°，仅为这组样本的结果，不能当作所有纹理的精度上界。还检查了输入不变、背光归零和中性法线不受 Y 转换影响。\n\n这些结果只证明数值处理与约定一致，没有证明 AI 生成的石纹正确。即使整个方向链路通过，原图的暗色污迹仍可能被误估成凹坑，需回到素材审核。"
+    },
+    {
+      "heading": "接到 Cocos / Web：用校准件确认链路，再换成正式石纹",
+      "body": "[Cocos Creator 3.8 LTS PBR 文档](https://docs.cocos.com/creator/3.8/manual/zh/shader/effect-builtin-pbr.html) 列出 builtin-standard 的 normalMap、normalStrength 与 USE_NORMAL_MAP。它们提供接入和强度控制入口；不表示引擎会自动识别所有导出约定。本文用该文档核对参数入口，数据解释采用上面的 glTF 合同，实际采样与转换须按项目版本验证。\n\n1. 在独立测试场景放一块 UV 与切线明确的平面，固定相机、灰色固有色、粗糙度与曝光。先关闭其他干扰，用中性法线和已知倾斜样本确认材质确实采用了法线。\n2. 把同一盏灯依次移到 +Y、−Y，再测 +X、−X。灯光方向必须先转换到与法线一致的空间；不能直接把本文数组当成任意模型的世界坐标。\n3. 接入 AI 法线，先保留灰色固有色检查凹凸，再恢复原固有色，排查照片里烘在颜色中的旧阴影。每次只改一个因素，保存对照。\n4. 用最终压缩配置构建 H5/小游戏，在实际距离和运动视角检查接缝与闪烁；编辑器里的未压缩预览不代表发行包。移动端再测低端设备；PC/主机复用同一套方向校准和导出记录，重新验证自己的渲染后端。\n\n默认 2D Sprite 的显示流程不能直接照搬这套 3D PBR 接法；2D 动态光照需要匹配的自定义材质及坐标约定。首版出错时回退到已批准材质或关闭法线细节，保留基础颜色，不在玩家端临时请求模型重画。以上均为接入方案，本次未做引擎实测。"
+    },
+    {
+      "heading": "评估与成本：方向正确只是第一道门",
+      "body": "| 维度 | 应保留的证据 |\n| --- | --- |\n| 方向正确性 | 已知校准方向的角误差、四个斜光方向的预期与结果；按 UV 镜像区域单列 |\n| 素材质量 | AI 候选中凹凸误判、残留阴影、接缝与重复感；人工批准数和返工原因 |\n| 运行代价 | 同设备同镜头开/关法线时的帧耗时分布、纹理加载与实际显存占用；标明分辨率、格式和 mipmap |\n| 制作投入 | 生成、导出、修正和审核总时间，工具许可及实际用量费用；按最终批准材质计数 |\n\n本方案 AI 留在制作期：记录所用工具版本的执行位置、生成等待和资源占用；高分辨率先小批量测试。若使用云服务，另计上传、排队、重试和账单，本期未测价格。玩家端只采样已批准纹理，没有在线模型响应延迟或按次 AI 调用费，仍承担纹理带宽、显存与着色成本。\n\n缓存以原图哈希、算法版本、参数、导出约定和压缩配置标识，不能只按文件名复用。若要宣称省显存或提帧率，应比较目标设备的实际构建；文件压缩后的下载体积不能直接当作 GPU 占用。"
+    },
+    {
+      "heading": "25 分钟练习：交一条方向合同和一次多光向反例",
+      "body": "1. 4 分钟：画一块表面与局部 X/Y/Z，写清源法线和目标法线的 Y 约定。没有素材就用本文三个样本。\n2. 6 分钟：运行代码，核对正面光相同、上下斜光交换；把转换再做一次，解释为什么回到错误方向。\n3. 5 分钟：用下面提示词让已有助手审阅导出记录，或人工填写；未提供的配置标为未知，不猜默认值。\n4. 7 分钟：有 3D 工程就接已知校准件，记录四个斜光方向；没有工程就交预期表，明确“引擎与真机待测”。不要把脚本通过写成素材通过。\n5. 3 分钟：交付方向合同、实际输出、校准对照和一个未解决问题，再决定是否批量生成石纹。\n\n```text\n审阅这份游戏材质导出与导入记录。\n输入：工具/算法版本、输入图片来源、法线空间、源/目标 Y 约定、\n通道编码、UV 与切线、已执行的转换、四个光向的预期与结果。\n请逐项指出：已知事实、缺失配置、可能重复转换的位置、最小验证步骤。\n不要凭蓝紫色外观猜方向，不把上下翻图等同于绿色通道取反。\n未提供商用依据、模型效果或设备测量时，明确写未知。\n```\n\n四项来源均于 2026-11-25 联网检索并打开。这是长期实用方法与原创教学实验，不是新产品新闻或前沿研究复现。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Adobe Substance 3D Sampler：Image To Material，AI Powered 与 B2M（2026-04-07 滚动文档；2026-11-25 核验，未安装）",
+      "url": "https://experienceleague.adobe.com/en/docs/substance-3d-sampler/using/filters/tools/image-to-material"
+    },
+    {
+      "title": "Adobe Substance 3D FAQ：订阅与学生/教师非商用许可限制（2026-04-02 更新；2026-11-25 核验）",
+      "url": "https://helpx.adobe.com/substance-3d/substance-3d-faq.html"
+    },
+    {
+      "title": "Khronos glTF 2.0 规范：normalTexture、线性数据及切线空间方向（页面版本 2.0.1；2026-11-25 核验）",
+      "url": "https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#material-normaltexture"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：PBR 的 normalMap、normalStrength 与 USE_NORMAL_MAP（2026-11-25 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/shader/effect-builtin-pbr.html"
+    }
+  ]
+}
