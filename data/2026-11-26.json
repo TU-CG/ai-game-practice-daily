@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-26",
+  "tags": [
+    "development",
+    "assets",
+    "testing"
+  ],
+  "title": "让 AI 帮你找游戏素材：语义最像，不代表项目能用",
+  "summary": "用文字搜索药水图标，最相似的候选却可能没有使用批准或超过交付尺寸。用可运行的向量实验，解释先取前三再过滤为何漏检；附 CLIP / pgvector 公开案例、Cocos/Web 制作流程和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 多模态检索原型待验证",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏的制作工具；移动及 PC/主机资产流程可迁移；Node.js v22.16.0 实跑",
+  "sections": [
+    {
+      "heading": "场景：搜到最像的药水图标，为什么还是不能用",
+      "body": "一款 Cocos H5 游戏要给背包加“蓝色、圆瓶、木塞的治疗药水”。团队已有很多图标，文件名却是 export_041、item_final2。制作工具可以用多模态模型把文字与图片编码到同一个向量空间，按相似度找候选，减少逐个翻文件的工作。\n\n但排第一的图片可能还没有项目使用批准；排第二的是 2048×2048 的源图，不符合这次“交付尺寸不超过 512”的约定。若只取前三名再剔除，面板可能只剩一张，让人误以为库里没有其他候选。\n\n**语义检索回答“像不像”；可信元数据回答“这次能不能用”。** 本期主讲两者怎样组合。图文编码器属于多模态机器学习，余弦排序和字段过滤属于确定性检索；这里没有生成新美术、强化学习或自主智能体。状态机、行为树不参与素材相似度计算，游戏仍使用批准后的固定资产。\n\n药水场景、元数据和代码都是原创教学示例。下面的向量由手工构造，实际执行的是过滤与排序检查；没有调用图像模型、下载素材、安装向量数据库或测量引擎性能。"
+    },
+    {
+      "heading": "公开案例：CLIP 可以连起文字与图片，但要单独验收游戏画风",
+      "body": "[Sentence Transformers 的图像检索示例](https://www.sbert.net/examples/sentence_transformer/applications/image-search/README.html) 使用 sentence-transformers/clip-ViT-B-32，分别编码图片与描述后比较相似度。它提供了一个可研究的接入起点；本期未安装，不能把文档示例当成本项目效果。\n\n[CLIP 原作者模型卡](https://raw.githubusercontent.com/openai/CLIP/main/model-card.md) 说明图文编码器采用对比学习，也明确原始模型的研究定位、部署边界与英语限制。因此这里把 CLIP 接入视为**需要领域验证的实验方案**，不是拿来即用的商用品质保证。中文查询、像素画、俯视图标和极小缩略图都要单列测试；不要假定英语检查通过就覆盖中文。\n\n先用自有图标建立小型验收集，保留作者认为相关的候选和无合适结果的查询。文字与图片必须使用配套编码器、同一模型修订及预处理；向量长度相同，不代表来自兼容空间。相似度也不是“能用的概率”，不能把 0.8 解释为 80% 正确。\n\n这些是既有公开工具和研究模型资料，非今日新品。实际采用时记录模型 revision 与依赖版本。本期没有采用第三方图片或权重，也不从代码许可推断任意素材的商用权利。"
+    },
+    {
+      "heading": "实施顺序：先拆开视觉描述和硬条件",
+      "body": "1. 给每个资产稳定 ID，登记内容哈希、项目用途、类型、实际宽高、批准记录和来源依据。批准必须针对本次用途，由已有审核流程提供；未知值不能由模型补成“允许”。尺寸由文件读取，不靠看图猜。\n2. 定义本次硬条件：demo 项目的 sprite、已批准用于该用途、宽高都为 1–512 的整数。512 只是练习的交付限制，不是 H5 性能标准；大图另行处理并验收后，应产生新的资产记录。\n3. 离线编码图标缩略图，保存模型与预处理版本。查询时先得到授权范围内且满足条件的候选集合，再在这个集合里比较语义相似度。初版可对小集合做精确扫描，留下可对照的基准。\n4. 面板展示候选 ID、预览、相似分数、批准依据和排除原因，开发者确认后才导入。若一个候选都不合适，允许返回空，不为了凑满数量偷偷放宽条件。\n\n下面提示词用于让已有助手拆分检索意图，也可人工完成；它不替代图文编码器或授权审核。\n\n```text\n我要找本项目已批准用于商业发行的蓝色圆瓶治疗药水图标，带木塞。\n交付为 sprite，宽高均不超过 512 像素。\n请只输出：visualDescription、hardFilters、unknowns。\n视觉描述只保留能看见的内容，可附英文查询候选供人工核对；\n项目、批准状态、类型、尺寸保留为结构化过滤字段。\n不得从画面、文件名或相似度推断批准状态，不得补造来源记录。\n缺少证据列入 unknowns；不得自行放宽条件或选择素材。\n```"
+    },
+    {
+      "heading": "可运行实验：先截断，再过滤，会丢掉后面的候选",
+      "body": "保存为 asset-search.mjs，运行 node asset-search.mjs，无额外依赖。五份资产都属于 demo/sprite；A 未批准，B 超尺寸，C/D/E 满足本次条件。代码计算非零向量的余弦相似度，同分按 ID 排序，输入数组保持不变。\n\n```js\n/**\n * @file Compare filtered and unfiltered top-k asset retrieval.\n * @author liliwei\n * @date 2026-11-26\n * @LastEditors liliwei\n * @LastEditTime 2026-11-26\n */\n/** @param {number[]} v Nonzero finite vector. @returns {number[]} Unit vector. */\nexport function unit(v) {\n  if (!Array.isArray(v) || !v.length ||\n      Array.from(v).some(x => !Number.isFinite(x))) throw Error('Invalid vector');\n  const n = Math.hypot(...v);\n  if (!Number.isFinite(n) || n === 0) throw Error('Invalid norm');\n  return v.map(x => x / n);\n}\n/** @param {object} a Reviewed metadata. @returns {boolean} Eligibility for this brief only. */\nexport function eligible(a) {\n  return a.project === 'demo' && a.kind === 'sprite' && a.approved === true &&\n    [a.width, a.height].every(n => Number.isSafeInteger(n) && n > 0 && n <= 512);\n}\n/** @param {object[]} rows Same-model assets. @param {number[]} query Same-model query.\n * @param {number} k Maximum result count. @returns {object[]} Exact cosine ranking. */\nexport function rank(rows, query, k) {\n  if (!Array.isArray(rows) || !Number.isSafeInteger(k) || k < 1) throw Error('Invalid input');\n  const q = unit(query), ids = new Set();\n  return rows.map(a => {\n    if (!a || typeof a.id !== 'string' || !a.id || ids.has(a.id)) throw Error('Invalid ID');\n    ids.add(a.id);\n    const v = unit(a.vector);\n    if (v.length !== q.length) throw Error('Dimension mismatch');\n    const score = v.reduce((s, x, i) => s + x * q[i], 0);\n    return { ...a, score };\n  }).sort((a, b) => b.score - a.score || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))\n    .slice(0, k);\n}\nexport const assets = [\n  { id: 'A', approved: null, width: 256, vector: [1, 0] },\n  { id: 'B', approved: true, width: 2048, vector: [0.99, 0.1] },\n  { id: 'C', approved: true, width: 256, vector: [0.9, 0.3] },\n  { id: 'D', approved: true, width: 256, vector: [0.8, 0.6] },\n  { id: 'E', approved: true, width: 256, vector: [0.6, 0.8] }\n].map(a => ({ project: 'demo', kind: 'sprite', height: a.width, ...a }));\nconst query = [1, 0], k = 3;\nconsole.log(JSON.stringify({\n  lateFilter: rank(assets, query, k).filter(eligible).map(a => a.id),\n  earlyFilter: rank(assets.filter(eligible), query, k).map(a => a.id)\n}));\n```\n\n示例只检查已给出的元数据。approved 是审核结果的简写，不是许可证明；正式记录需要审批版本和证据链接。代码也无法识别混用了两个模型，只会拒绝维数不匹配等数值错误；导入层还应检查 modelId、revision、预处理与索引版本，拒绝混库。"
+    },
+    {
+      "heading": "本次实跑：只剩一张，与实际上只有一张，是两件事",
+      "body": "代码在 Node.js v22.16.0 实际运行。查询为 [1,0]，全库相似度顺序是 A、B、C、D、E；A 为 1，B 约 0.99494。\n\n| 方法 | 实际返回 | 返回数量 | 覆盖合格集合的精确前三名 |\n| --- | --- | --- | --- |\n| 先取全库前三，再过滤 | C | 1 | 1/3 |\n| 先过滤，再取前三 | C、D、E | 3 | 3/3 |\n\nC、D、E 的相似度分别约为 0.94868、0.8、0.6。第一种做法没有返回不合格资产，但丢掉了 D/E；“零违规结果”不能证明检索完整。第二种返回了本例的完整候选，也**不能证明三张都符合美术需求**：这不是实际图片或模型输出，没有人工相关性标签。\n\n本次另用独立的二维角度公式，对 32 组批准状态、8 个查询方向共 256 组结果作对照；12 项非法输入和 7 项元数据拒绝检查通过，并检查同分、正比例缩放、空集合与输入不变。这里只证明限定检索逻辑，不证明真实模型召回、节省工时或数据库性能。\n\n验收时至少分开三类数：返回结果中违反硬条件的比例；近似索引对“合格集合精确 top-k”的覆盖；人工确认相关结果的比例。前两类回答实现是否守约，最后一类才接近“美术是否找到想要的图”。相似分数门槛应在本项目留出查询上确定，不能直接照搬本例的 0.6。"
+    },
+    {
+      "heading": "素材库变大后：写了 WHERE，也要看近似索引实际查到了什么",
+      "body": "[pgvector 原作者 README](https://raw.githubusercontent.com/pgvector/pgvector/master/README.md) 同时提供精确和近似检索，并说明近似索引扫描后再过滤时，可能返回不足数量的结果。该页面安装示例标为 v0.8.7；迭代扫描自 0.8.0 起提供，可以继续扫描，但仍受扫描上限约束。\n\n因此，“先满足条件再选最相似”是结果合同，不等于数据库必然采用与本文数组相同的执行顺序。仅把条件写进 SQL，不足以证明近似搜索找齐了候选；看到结果不足，也不能立刻断言库里缺图。\n\n先保留一条合格集合的精确检索基线，再用相同查询和过滤条件对比近似方案。按候选集合大小、条件命中比例分别记录 top-k 覆盖、返回不足次数及 P50/P95 耗时；出现漏检，再测试过滤列索引、分区或迭代扫描。别只在全库无过滤查询上报好看的延迟。本期没有部署 pgvector，不提供容量或速度结论。"
+    },
+    {
+      "heading": "迁移到 Cocos / Web：搜索在制作侧，游戏消费批准清单",
+      "body": "首版将编码和检索放在开发机或内部素材服务。按 [Cocos Creator 3.8 LTS JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html)，确认后的 ID 映射与版本可以通过 JsonAsset 导入并读取 json；图片仍走项目原有资源导入、图集和构建流程。不要把整套模型、素材库和内部批准记录打进玩家包。\n\n1. 制作面板选择资产后，导出逻辑 ID、内容哈希、资源映射版本；构建前再核对实际文件及批准状态。模型返回的文件名不能直接成为任意下载或加载路径。\n2. H5/小游戏检查真正构建后的下载量、纹理占用和图集效果；移动端补低端设备，PC/主机沿用清单与审核流程、重设平台预算。输入图尺寸合格并不自动等于运行开销合格。\n3. 编码按内容哈希、模型修订和预处理缓存，查询缓存还包含过滤条件、批准/权限版本与索引版本。批准撤销后，旧缓存结果也必须失效，不能等用户选中再发现过期。\n\n这套首版没有玩家运行时 AI 调用，不产生玩家操作到模型回复的延迟。制作侧仍需记录首次建库时间、增量编码时间、查询 P50/P95、队列长度和实际硬件占用；低频搜索不应在每帧重复编码。使用内部服务器时限制批处理并发，超时回到标签或文件名搜索。\n\n若改用云端编码，另计上传、排队、网络往返、重试和实际用量账单，先确认源素材允许发送到该服务；本期没有价格或耗时实测。不要从一个五向量实验推算百万素材的成本。人工挑选时间应连同误选返工一起计入收益。"
+    },
+    {
+      "heading": "25 分钟练习：交一个漏检反例，再交一份可采用清单",
+      "body": "1. 4 分钟：选一个自己的图标需求，拆成视觉描述与硬条件；没有素材就沿用五条虚拟记录。把未知批准状态保留下来。\n2. 6 分钟：运行代码，保存两组 ID。手算 C 的余弦值，再将 k 改为 1，解释为什么后过滤可能为空，而合格库并不为空。\n3. 5 分钟：用上面的提示词或人工整理一份检索请求。给 C 增加一次“批准撤销”，说明应怎样让缓存和结果同步失效。\n4. 7 分钟：有自有图标就人工标三条查询的相关候选；已有获准模型环境才试真实编码，并记录模型修订。没有环境就交验收表，明确模型相关性、中文效果与性能待测。\n5. 3 分钟：交付条件表、实际输出、精确参考结果和一个不应放宽条件的空结果案例。决定下一步先补元数据，还是值得接模型。\n\n四项来源均于 2026-11-26 联网检索并打开。可直接迁移的是检索合同、清单与验证方法；真实多模态素材检索仍须经过领域测试。本期不把合成向量的通过率写成 AI 效果。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Sentence Transformers：Image Search，clip-ViT-B-32 图文编码示例（滚动文档，2026-11-26 核验；未安装）",
+      "url": "https://www.sbert.net/examples/sentence_transformer/applications/image-search/README.html"
+    },
+    {
+      "title": "OpenAI CLIP：原作者 Model Card，研究用途、领域测试与英语限制（main 快照，2026-11-26 核验）",
+      "url": "https://raw.githubusercontent.com/openai/CLIP/main/model-card.md"
+    },
+    {
+      "title": "pgvector：原作者 README，精确/近似检索、过滤与迭代扫描（安装示例 v0.8.7，2026-11-26 核验；未运行）",
+      "url": "https://raw.githubusercontent.com/pgvector/pgvector/master/README.md"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-26 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
