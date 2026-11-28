@@ -1,0 +1,65 @@
+{
+  "date": "2026-11-28",
+  "tags": [
+    "testing",
+    "design",
+    "development"
+  ],
+  "title": "让 AI 调战斗数值：同一个种子，也可能不是同一场对照",
+  "summary": "武器参数没变，只多抽一次特效随机数，自动试玩也可能从失败变成成功。用可运行的四骰枚举实验对齐攻击事件，分清总体胜率与逐局得失；附 Optuna 工具案例、提示词、Cocos/Web 接入和 25 分钟练习。",
+  "readingMinutes": 8,
+  "stage": "实用方法 / 原创离线枚举实验",
+  "scope": "Cocos Creator 3.8 LTS / Web、H5 与小游戏；移动及 PC/主机数值验收可迁移；Node.js v22.16.0 实跑",
+  "sections": [
+    {
+      "heading": "场景：武器变强了，还是这次刚好比较幸运",
+      "body": "一款 Cocos H5 战斗原型，让角色在四次攻击内击倒 20 点生命的木桩。旧武器每次命中造成 5 点伤害，命中率 80%；候选提高到 7 点伤害，命中率降为 60%。生成式助手可以提出这种交换，也可以起草模拟器，但“跑了一次，新版赢了”不能决定是否采用。\n\n先把两版放进相同的外部条件：同一关卡、同一初始状态、同一攻击编号对应的随机数。**要对齐的是随机事件的含义，不只是记录相同种子。** 如果新版特效多抽了一次随机数，后续命中判定就可能错位。\n\n本期采用制作侧 AI 提案、确定性枚举验收。语言模型负责解释和起草；模拟器、随机数与参数搜索不自动等于强化学习。若将来接学习型自动试玩，策略模型也要冻结；本例直接用“每回合攻击”的规则，不训练任何模型。状态机管理战斗阶段，行为树仍可管理实际角色的行动。\n\n武器、数据、提示词和代码均为原创教学示例；未另行调用外部模型、运行 Cocos 或测量玩家体验。"
+    },
+    {
+      "heading": "公开工具案例：优化器的种子，管不到整个游戏",
+      "body": "[Optuna 官方 FAQ](https://optuna.readthedocs.io/en/stable/faq.html#how-can-i-obtain-reproducible-optimization-results) 展示给 TPESampler 设置种子，并提醒：目标函数自身不确定，或采用并行、分布式优化时，仍可能无法复现。当前 stable 文档标为 5.1.0；这是既有工具方法，不是今日发布消息。\n\n可把“输入武器参数、返回验收指标”的函数交给优化工具寻找候选。优化器根据试验反馈提议参数，与语言模型写提案、强化学习更新行动策略是不同环节。本期没有安装或运行 Optuna，只准备它将来所需的可核验目标函数。\n\n[Gymnasium 的 Env API](https://gymnasium.farama.org/api/env/) 则提供 reset(seed=...) 与环境内部 np_random：明确传入整数可重置随机数生成器，seed=None 通常延续已有状态。这个接口有助于管理环境随机性，却不保证粒子、外部库和策略采样也使用同一套控制。重放指定一局，与连续生成新局，应使用明确不同的调用约定。"
+    },
+    {
+      "heading": "实施顺序：先冻结场景，再让 AI 提参数",
+      "body": "1. 写清本轮只改 damage 和 hitFaces。四次攻击、不暴击、不回血、目标不反击；每次用一个独立均匀十面骰，点数 0–9，小于 hitFaces 才命中。死亡后余下攻击不影响“是否四次内击倒”这一指标。\n2. 每局先准备四个攻击骰值，按 attackIndex 读取。两个版本共享这份输入，不能共享一个会继续向前走的生成器实例；也不能把旧版的“命中/未中”结果直接给新版，新命中率应重新作用于同一个骰值。\n3. 保存 rulesVersion、候选参数、scenarioId、骰值或生成器算法与种子、输入哈希、两版结果。先让旧版与自身对照，逐局都应相同，再比较改动。\n4. 正式项目把开发用场景与最终验收场景分开。反复看过失败例再调参数，那批例子就成为调参资料；另留未参与选择的地图、玩家策略与种子。\n5. 对异常、超时保留记录，验收未完成时不输出“胜率提高”。通过数值门槛后再试玩手感；更高胜率不是普遍的设计目标。\n\n可复制给已有助手的提示词：\n\n```text\n为四次攻击木桩原型审阅一份武器候选，不直接修改工程。\n固定：目标 HP=20，攻击四次，无暴击、回血或反击。\n每次骰值为独立均匀整数 0..9，roll < hitFaces 才命中。\n旧版 damage=5、hitFaces=8；候选 damage=7、hitFaces=6。\n只解释伤害与稳定性的交换，并列出验收步骤，不声称模拟已运行。\n两版按相同 attackIndex 读取相同骰值；粒子随机数不得占用攻击骰值。\n指出仅有总体胜率遗漏了什么，给出一个旧赢新输的四骰反例。\n输出：规则假设、候选理由、反例、待验证项；不要改胜利条件。\n```\n\n例如 [6,6,0,0] 是旧赢新输的反例；[0,0,0,9] 则是旧输新赢。两例都能直接手算，不必相信助手的结论。"
+    },
+    {
+      "heading": "可运行实验：枚举全部四骰组合，留下逐局得失",
+      "body": "保存为 paired-combat.mjs，执行 node paired-combat.mjs，无额外依赖。本例只有 10⁴=10,000 种等概率输入，因此全部枚举，不做随机抽样；每个十进制编号的四位数字对应四次攻击。代码中的上限只是教学合同。\n\n```js\n/**\n * @file Compare combat parameters with event-aligned dice tapes.\n * @author liliwei\n * @date 2026-11-28\n * @LastEditors liliwei\n * @LastEditTime 2026-11-28\n */\n/**\n * Resolve four attacks against a 20-HP target.\n * @param {{damage:number, hitFaces:number}} weapon Damage and successful faces out of ten.\n * @param {number[]} rolls Four attack rolls, each an integer from 0 through 9.\n * @returns {number} One for a kill within four attacks, otherwise zero.\n */\nexport function win(weapon, rolls) {\n  if (!weapon || !Number.isInteger(weapon.damage) ||\n      weapon.damage < 1 || weapon.damage > 20 ||\n      !Number.isInteger(weapon.hitFaces) ||\n      weapon.hitFaces < 0 || weapon.hitFaces > 10) {\n    throw new Error('Invalid weapon');\n  }\n  if (!Array.isArray(rolls) || rolls.length !== 4 ||\n      !Array.from(rolls).every(x => Number.isInteger(x) && x >= 0 && x <= 9)) {\n    throw new Error('Invalid attack tape');\n  }\n  return Number(rolls.reduce((hp, r) =>\n    hp - (r < weapon.hitFaces ? weapon.damage : 0), 20) <= 0);\n}\n/**\n * Enumerate all equally likely four-roll scenarios without sampling.\n * @param {{damage:number, hitFaces:number}} before Baseline parameters.\n * @param {{damage:number, hitFaces:number}} after Candidate parameters.\n * @returns {object} Joint outcome counts and exact win-rate difference.\n */\nexport function compare(before, after) {\n  win(before, [0, 0, 0, 0]); win(after, [0, 0, 0, 0]);\n  const out = { total: 10000, both: 0, gained: 0, lost: 0, neither: 0 };\n  for (let id = 0; id < out.total; id++) {\n    const rolls = [0, 1, 2, 3].map(t =>\n      Math.floor(id / (10 ** t)) % 10);\n    const a = win(before, rolls), b = win(after, rolls);\n    const key = a ? (b ? 'both' : 'lost') : (b ? 'gained' : 'neither');\n    out[key]++;\n  }\n  return { ...out,\n    beforeRate: (out.both + out.lost) / out.total,\n    afterRate: (out.both + out.gained) / out.total,\n    delta: (out.gained - out.lost) / out.total };\n}\nconst before = { damage: 5, hitFaces: 8 };\nconst after = { damage: 7, hitFaces: 6 };\nconsole.log(JSON.stringify({ case: 'paired', ...compare(before, after) }));\nconsole.log(JSON.stringify({ case: 'unchanged', ...compare(before, before) }));\n\n// Same pre-generated stream; an extra visual draw shifts attack positions.\nconst stream = [0, 9, 1, 8, 2, 7, 3, 6];\nconst sequential = stream.slice(0, 4);\nconst shifted = [0, 2, 4, 6].map(i => stream[i]);\nconsole.log(JSON.stringify({ case: 'shared-stream-drift',\n  sequential, shifted, before: win(before, sequential),\n  after: win(before, shifted) }));\n```\n\nboth 是两版都赢，gained 是旧输新赢，lost 是旧赢新输，neither 是两版都输。delta=(gained−lost)/total，单位是胜率差；百分数显示时应称“百分点”。\n\n末尾 stream 是人为写下的固定序列，模拟同一伪随机流中多消耗一次特效随机数。它没有实现种子生成器，也不是模型或真实引擎的回放。"
+    },
+    {
+      "heading": "本次实跑：净增 6.56 个百分点，也有 1,072 局变差",
+      "body": "正文代码在 Node.js v22.16.0 实际执行：\n\n| 比较 | 旧版赢 | 候选赢 | 旧输新赢 | 旧赢新输 | 胜率差 |\n| --- | --- | --- | --- | --- | --- |\n| 5 伤害 / 8 面 → 7 伤害 / 6 面 | 4,096 | 4,752 | 1,728 | 1,072 | +6.56 个百分点 |\n| 旧版与自身 | 4,096 | 4,096 | 0 | 0 | 0 |\n\n第一行两版都赢 3,024 局、都输 4,176 局，四类合计 10,000。旧版必须四次全中，胜率为 0.8⁴=40.96%；新版至少三次命中，胜率为 4×0.6³×0.4+0.6⁴=47.52%。这是所定义有限模型的精确概率，不是某款游戏的实测胜率，也不需要给枚举误差补置信区间。\n\n同一参数的错位反例更值得注意：原先攻击读取 [0,9,1,8]，只有两次命中，失败；每次攻击后额外消耗一个数，攻击变成 [0,1,2,3]，四次全中，成功。武器没变，看到的结果却变了。额外抽取在真实均匀随机流中不必系统性提升胜率，但会破坏这次逐事件配对。\n\n本次另用独立二项式公式核对全部 220 组合法武器参数的胜率，检查交换两版、命中边界、输入不变及 22 项非法输入，均通过。它们验证计算合同，不证明候选更好玩。"
+    },
+    {
+      "heading": "规模变大之后：拆开随机流，也要保留真正独立的验收",
+      "body": "正式游戏通常无法全枚举，可先固定一批场景，给每场保存成对结果。配对能帮助定位“同一输入下哪里改变”，在合适的相关性条件下也可能减少比较噪声；不能保证任意策略、任意配对都降低方差。抽样结果应按独立完整对局估计不确定性，不把一局四次攻击当四个独立样本。\n\n[NumPy 的并行随机数文档](https://numpy.org/doc/stable/reference/random/parallel.html) 介绍 SeedSequence 派生随机流，以及将确定、唯一的任务 ID 与根种子组合。当前文档标为 2.5。借此思路，大批模拟可按固定 scenarioId 派生输入，不能让“哪个工作线程先空闲”决定它遇到什么随机数；本期没有运行 NumPy。\n\n游戏里至少分开关卡、战斗、策略采样和视觉特效的随机来源；流内再固定事件编号。可先预生成小型攻击表，以最直观的方式验证映射。若新武器改变攻速、召唤物或行动顺序，attackIndex 可能不再代表相同情境，应重新定义事件键和比较合同；不要强迫两个真实不同的战斗轨迹完全一致。\n\n验收表同时保留：\n\n- 结果：总体差异、逐地图与策略分组、旧赢新输的回放，以及明确失败项。\n- 可复现性：规则/策略/生成器版本、场景列表哈希、重复执行的逐局一致性。\n- 覆盖与成本：独立场景数量、尚未覆盖的机制、全部候选尝试数、模拟耗时及人工试玩记录。\n\n本期没有搜索最优参数；固定评测集也不能被无限调参后继续冒充独立验收。"
+    },
+    {
+      "heading": "接到 Cocos / Web：模拟在制作侧，发布批准后的配置",
+      "body": "先将战斗规则写成不依赖节点、动画和墙钟时间的纯逻辑模块，制作侧批量调用；Cocos 原型调用同一规则入口，再用表现层播放结果。攻击采用明确逻辑步，不从渲染帧数推导骰值编号。\n\n[Cocos Creator 3.8 LTS 的 JSON 资源文档](https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html) 支持 JsonAsset 与 json 属性。开发构建可导入带版本的武器配置和回放场景，校验后逐步播放；正式包只带批准配置及必要资源，测试表留在制作工具。小游戏、移动端、PC/主机都可迁移这套数据合同，平台的物理、浮点与并发差异仍需分别验证，不能从 Node 枚举推断跨平台完全一致。\n\n本方案运行时没有语言模型推理、云请求、模型缓存或逐次调用费。离线 AI 助手可以在已有云端或本地环境提案；若用云端，限制每轮候选数与超时，记录实际调用费和审阅时间，超时就继续使用旧配置，不阻塞游戏。\n\n模拟批处理设置并发与总时长上限，缓存键包含规则版本、参数、策略版本和场景集哈希；任一项变化都重新计算。报告下载量、配置加载与帧耗时之前，先在目标设备测量。本次未做引擎和设备性能测试，也未采用第三方素材。"
+    },
+    {
+      "heading": "25 分钟练习：交一份逐局对照和一个错位反例",
+      "body": "1. 4 分钟：手算 [6,6,0,0] 与 [0,0,0,9]，确认两种武器各有会赢、会输的情形；写出四次攻击的合同。\n2. 6 分钟：运行正文代码，保存三行输出，核对四类计数与两个解析胜率。将候选改回旧版，确认 gained 和 lost 同时为零。\n3. 5 分钟：用提示词让已有助手审阅，或人工给出候选并注明。画出固定 stream 的八个位置，圈出额外特效抽取如何移动攻击读数。\n4. 7 分钟：已有 Cocos/Web 工程就以自有色块回放两条四骰记录，区分逻辑结果和动画；没有工程就交回放 JSON 与字段说明，把引擎接入标为待测。\n5. 3 分钟：保存参数、输入与实际输出，写下下一轮独立验收场景。明确采用标准是目标难度、稳定性还是手感，不能只写“胜率越高越好”。\n\n四项来源于 2026-11-28 联网检索并打开，为既有官方文档与长期方法；版本以所链接页面的标识为准。本期交付的是可复跑的原创有限模型实验与接入方案，不是 Optuna 调参成果或生产游戏收益报告。"
+    }
+  ],
+  "sources": [
+    {
+      "title": "Optuna：可复现优化、采样器种子与目标函数（stable 文档标为 5.1.0；2026-11-28 核验，未安装）",
+      "url": "https://optuna.readthedocs.io/en/stable/faq.html#how-can-i-obtain-reproducible-optimization-results"
+    },
+    {
+      "title": "Gymnasium：Env.reset、seed 与 np_random（滚动 API 文档；2026-11-28 核验，未安装）",
+      "url": "https://gymnasium.farama.org/api/env/"
+    },
+    {
+      "title": "NumPy：并行随机数与确定性任务 ID（stable 文档标为 2.5；2026-11-28 核验，未运行）",
+      "url": "https://numpy.org/doc/stable/reference/random/parallel.html"
+    },
+    {
+      "title": "Cocos Creator 3.8 LTS：JSON 资源与 JsonAsset（2026-11-28 核验）",
+      "url": "https://docs.cocos.com/creator/3.8/manual/zh/asset/json.html"
+    }
+  ]
+}
